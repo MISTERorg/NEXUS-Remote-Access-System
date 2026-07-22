@@ -1,0 +1,1 @@
+2026-07-22 20:34:58,447 [INFO] nexus.audit: {"user_id": "075962ff-4e24-4957-acac-ca8ab6ae1824", "ip": "unknown", "mfa_used": false, "event": "auth.login_success", "logger": "nexus.audit", "level": "info", "timestamp": "2026-07-22T15:04:58.447959Z"}
