@@ -1,0 +1,5 @@
+2026-07-22 20:34:39 [info     ] tls.server_context_created     mode=mTLS
+2026-07-22 20:34:39 [info     ] relay.starting                 host=0.0.0.0 port=7000
+2026-07-22 20:34:39 [info     ] ws_server.started              url=wss://0.0.0.0:7000
+2026-07-22 20:34:39 [info     ] relay.started
+2026-07-22 20:34:39 [info     ] relay.running                  host=0.0.0.0 port=7000

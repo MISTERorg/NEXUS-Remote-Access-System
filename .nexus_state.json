@@ -1,0 +1,7 @@
+{
+  "public_ip": "122.183.33.32",
+  "agent_token": "U6mRE6XmwwW-5FSjpkd-IBygr3sZu_TVOeoRoQbBBOQ",
+  "jwt_secret": "MxoQLifcx-CE_Sg2j2RfQtiDDgZDd55h6iiIhTg1i_BEVW8qAAk8b0caoPX0REJH",
+  "relay_port": 7000,
+  "api_port": 8080
+}

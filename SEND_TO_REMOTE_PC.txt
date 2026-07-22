@@ -1,0 +1,15 @@
+NEXUS Remote Support — Instructions for the Remote PC
+======================================================
+
+STEP 1: Install Python from https://www.python.org/downloads/
+        Tick 'Add Python to PATH' during install.
+
+STEP 2: Open Command Prompt inside the nexus-ras-v2 folder and run:
+
+  python connect_remote.py --relay ws://122.183.33.32:7000 --token U6mRE6XmwwW-5FSjpkd-IBygr3sZu_TVOeoRoQbBBOQ
+
+That's it — everything else is automatic.
+
+======================================================
+Relay URL   : ws://122.183.33.32:7000
+Agent Token : U6mRE6XmwwW-5FSjpkd-IBygr3sZu_TVOeoRoQbBBOQ

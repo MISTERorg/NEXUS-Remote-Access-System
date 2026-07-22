@@ -1,0 +1,114 @@
+# config/defaults.yaml
+# ---------------------
+# Default NEXUS configuration values.
+# These are baseline values used when no environment variable or .env entry overrides them.
+# Override any setting with the matching NEXUS_* environment variable.
+# See config/settings.py for the full list of supported keys.
+
+app:
+  name: "NEXUS Remote Access"
+  version: "1.0.0"
+  debug: false
+  environment: "production"       # development | staging | production
+
+# ------------------------------------------------------------------
+# TLS / mTLS
+# ------------------------------------------------------------------
+tls:
+  cert_file: "certs/server.crt"
+  key_file: "certs/server.key"
+  ca_file: "certs/ca.crt"
+  require_client_cert: true       # Set false to disable mTLS (dev only)
+  min_tls_version: "TLSv1.3"
+
+# ------------------------------------------------------------------
+# Relay server
+# ------------------------------------------------------------------
+relay:
+  host: "0.0.0.0"
+  port: 7000
+  ws_path: "/ws"
+  max_connections: 10000
+  heartbeat_interval: 30          # seconds between heartbeat pings
+  session_timeout: 3600           # auto-close idle sessions after 1 hour
+  max_payload_bytes: 10485760     # 10 MB per WebSocket message
+
+# ------------------------------------------------------------------
+# Authentication
+# ------------------------------------------------------------------
+auth:
+  secret_key: "CHANGE_ME_IN_PRODUCTION_32BYTES!!"  # Override in production!
+  algorithm: "HS256"
+  access_token_expire_minutes: 60
+  refresh_token_expire_days: 30
+  mfa_enabled: true
+  max_login_attempts: 5
+  lockout_minutes: 15
+  allowed_origins:
+    - "*"                          # Restrict to your domain in production
+
+# ------------------------------------------------------------------
+# Database
+# ------------------------------------------------------------------
+database:
+  url: "sqlite+aiosqlite:///data/nexus.db"
+  echo_sql: false
+  pool_size: 10
+  max_overflow: 20
+
+# ------------------------------------------------------------------
+# Agent behaviour
+# ------------------------------------------------------------------
+agent:
+  screen_fps: 15
+  screen_quality: 75              # JPEG quality (1-100)
+  screen_scale: 1.0               # Downscale factor (e.g. 0.75 = 75%)
+  clipboard_enabled: true
+  file_transfer_enabled: true
+  terminal_enabled: true
+  max_transfer_mb: 500
+  reconnect_delay: 5              # Seconds base delay between reconnect attempts
+  reconnect_max_retries: 10
+
+# ------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------
+log:
+  level: "INFO"                   # DEBUG | INFO | WARNING | ERROR
+  format: "json"                  # json | console
+  file: "logs/nexus.log"
+  max_bytes: 10485760             # 10 MB log rotation
+  backup_count: 5
+  audit_file: "logs/audit.log"
+
+# ------------------------------------------------------------------
+# Runtime directories (created automatically on startup)
+# ------------------------------------------------------------------
+directories:
+  certs: "certs"
+  data: "data"
+  logs: "logs"
+  recordings: "recordings"
+
+# ------------------------------------------------------------------
+# Feature flags
+# ------------------------------------------------------------------
+features:
+  session_recording: false        # Record screen sessions server-side (not yet implemented)
+  p2p_webrtc: false               # Direct peer-to-peer via WebRTC (roadmap)
+  audit_log: true
+  rate_limiting: true
+
+# ------------------------------------------------------------------
+# Rate limiting (pairs with utils/ratelimit.py)
+# ------------------------------------------------------------------
+rate_limits:
+  login:
+    max_calls: 10
+    window_seconds: 60
+  api_default:
+    max_calls: 300
+    window_seconds: 60
+  ws_messages:
+    max_calls: 1000
+    window_seconds: 10
