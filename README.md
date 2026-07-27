@@ -5,12 +5,25 @@ Self-hosted remote desktop, terminal, and file-transfer platform. One relay serv
 > **Status: v1.** This is the first working version. It's had real debugging mileage (see [Known Limitations](#known-limitations-v1) below) but hasn't been used at scale or audited by anyone outside the team that built it. Read that section before deciding what you trust it with.
 
 ---
+## DEMO
 
+### LOGIN
+- ![img.png](img.png)
+- if your credentials are not correct you wont have access
+- ![img_1.png](img_1.png)
+### DASHBOARD
+![img_2.png](img_2.png)
 ## What it does
 
 - **Remote desktop** — live screen streaming (JPEG over WebSocket) with full mouse and keyboard input forwarding.
+![img_3.png](img_3.png)
+- for presentation purposes, the demo was made on one node
+- ![img_4.png](img_4.png)
+
 - **Remote terminal** — a real shell (PowerShell on Windows, `$SHELL` elsewhere) attached per session, streamed both ways.
 - **File browser & transfer** — list remote directories; upload/download between operator and agent.
+- ![img_5.png](img_5.png)
+- you get access to the target whole file system,
 - **Clipboard sync** — pull or push clipboard contents between operator and agent.
 - **Multi-device fleet** — a registry tracks every agent that's ever connected, online/offline/busy status, and per-device capabilities.
 - **Role-based access** — JWT-authenticated operators with `admin` / `operator` / `viewer` roles; agents authenticate separately with per-device tokens.
