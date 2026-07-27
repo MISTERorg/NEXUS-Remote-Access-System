@@ -14,8 +14,9 @@ Improvements over v1:
   - Binary frame routing now validates session ownership before forwarding
   - _on_peer_dead properly awaits graceful WS close with timeout
   - RelayStats dataclass for observability
+  - Programmatic main() function provided for setup_and_launch / PyInstaller integration
 
-Start with:
+Start via CLI:
     python -m core.relay --host 0.0.0.0 --port 7000
 """
 
@@ -46,6 +47,26 @@ from utils.heartbeat import HeartbeatManager, RateLimiter
 from utils.logger import get_logger
 
 log = get_logger("nexus.relay")
+
+# Every flat message type dashboard.html's sendSessionMsg() actually sends
+# for an in-progress session (see grep of sendSessionMsg(...) call sites).
+# These match core.session.MessageType values directly — the browser does
+# not wrap them in any outer envelope.
+_CONTROLLER_SESSION_MSG_TYPES = frozenset({
+    "screen_request",
+    "mouse_event",
+    "key_event",
+    "terminal_open",
+    "terminal_data",
+    "terminal_close",
+    "file_list",
+    "file_download_start",
+    "file_upload_start",
+    "file_upload_chunk",
+    "file_upload_end",
+    "clipboard_get",
+    "clipboard_set",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +161,13 @@ class RelayServer:
             max_misses=3,
             on_dead=self._on_peer_dead,
         )
+
+        # Centralized close notification: fires for EVERY session_manager.close()
+        # call, regardless of origin (this relay's own WS handler, an idle sweep,
+        # an agent disconnect, or the dashboard's REST DELETE /sessions/{id}
+        # endpoint calling session_manager.close() directly). See
+        # SessionManager.on_close() in core/session.py for why this exists.
+        session_manager.on_close(self._notify_session_closed)
 
     # ------------------------------------------------------------------
     # Start
@@ -305,6 +333,18 @@ class RelayServer:
         elif mtype == "session.close":
             await self._handle_session_close(conn, msg)
 
+        elif mtype in _CONTROLLER_SESSION_MSG_TYPES and conn.identity_type == "controller":
+            # Every interactive control message the browser sends — mouse
+            # moves, keystrokes, screen_request polls, terminal I/O, file
+            # transfer, clipboard — arrives here as flat plaintext JSON
+            # (see dashboard.html's sendSessionMsg()). Previously NONE of
+            # these had a dispatch case at all, so every one of them fell
+            # through to the `else: log.debug("relay.unhandled", ...)`
+            # branch below and was silently discarded — the browser could
+            # open a session and watch the connection succeed, but no
+            # click, keystroke, or command ever actually reached the agent.
+            await self._handle_session_data(conn, msg)
+
         elif mtype == "device.list" and conn.identity_type == "controller":
             devices = await device_registry.list_online()
             await conn.send_json({
@@ -353,11 +393,11 @@ class RelayServer:
         # Wire send functions
         ctrl_conn_id = conn.conn_id
 
-        async def send_to_controller(data: bytes) -> None:
+        async def send_to_controller(data: dict) -> None:
             c = self._connections.get(ctrl_conn_id)
             if c:
-                await c.send_bytes(data)
-                self._stats.total_bytes_relayed += len(data)
+                await c.send_json(data)
+                self._stats.total_bytes_relayed += len(json.dumps(data))
 
         session.attach_controller(send_to_controller)
 
@@ -428,34 +468,88 @@ class RelayServer:
                 })
             await session_manager.close(session_id, reason=reason)
 
+    async def _handle_session_data(self, conn: Connection, msg: dict) -> None:
+        """
+        Route one plaintext interactive message from a browser controller
+        into its session. Session.handle_from_controller_plaintext() is
+        what actually encrypts it before it goes anywhere near the agent's
+        WebSocket — nothing here touches the agent-side cipher directly.
+        """
+        session_id = msg.get("session_id")
+        if not session_id:
+            return
+        session = await session_manager.get(session_id)
+        if not session or session.state != SessionState.ACTIVE:
+            return
+        if session.controller_id != conn.user_id:
+            log.warning("relay.unauthorized_session_data",
+                        conn_id=conn.conn_id, session_id=session_id,
+                        user_id=conn.user_id)
+            return
+        await session.handle_from_controller_plaintext(msg)
+
     async def _handle_session_close(self, conn: Connection, msg: dict) -> None:
+        """
+        Fired when either side sends an explicit {"type": "session.close"}
+        WS message. Notification to both sides, the device-status flip back
+        to ONLINE, and the active_sessions decrement all now live in
+        _notify_session_closed — registered once as a session_manager
+        close-listener — so this handler just needs to trigger the close.
+        """
         session_id = msg.get("session_id")
         if not session_id:
             return
         session = await session_manager.get(session_id)
         if not session:
             return
-
-        # Notify the other side
-        if conn.identity_type == "controller":
-            agent_conn_id = self._agent_conns.get(session.device_id)
-            if agent_conn_id and agent_conn_id in self._connections:
-                await self._connections[agent_conn_id].send_json({
-                    "type": "session.close",
-                    "session_id": session_id,
-                })
-        else:
-            ctrl_conn_id = self._controller_conns.get(session.controller_id)
-            if ctrl_conn_id and ctrl_conn_id in self._connections:
-                await self._connections[ctrl_conn_id].send_json({
-                    "type": "session.close",
-                    "session_id": session_id,
-                })
-
         await session_manager.close(session_id, reason="user_closed")
-        if conn.device_id:
-            await device_registry.set_status(conn.device_id, DeviceStatus.ONLINE)
-        if self._stats.active_sessions > 0:
+
+    async def _notify_session_closed(self, session, reason: str) -> None:
+        """
+        Single source of truth for what happens when a session ends, no
+        matter which code path called session_manager.close():
+          - relay._handle_session_close (explicit WS message from either side)
+          - relay._handle_session_reject (agent rejected the session)
+          - session_manager.sweep_expired (idle timeout)
+          - session_manager.close_all_for_device (agent disconnected)
+          - dashboard.py's DELETE /sessions/{id} REST endpoint, which calls
+            session_manager.close() directly with no knowledge of this
+            relay's connection registry at all
+
+        Previously this logic was duplicated inline in _handle_session_close
+        and only reachable through that one path — meaning a session closed
+        via the REST API never notified the agent's live WebSocket, and the
+        device-status-back-to-ONLINE update used the WRONG id (conn.device_id,
+        which is None for controller-initiated closes since only agent
+        connections set device_id) so it silently never fired for the normal
+        case of a controller ending a session. Both are fixed by centralizing
+        here and keying off the Session object's own device_id/controller_id,
+        which are always populated correctly regardless of who initiated it.
+        """
+        payload = {"type": "session.close", "session_id": session.session_id, "reason": reason}
+
+        agent_conn_id = self._agent_conns.get(session.device_id)
+        if agent_conn_id and agent_conn_id in self._connections:
+            await self._connections[agent_conn_id].send_json(payload)
+
+        ctrl_conn_id = self._controller_conns.get(session.controller_id)
+        if ctrl_conn_id and ctrl_conn_id in self._connections:
+            await self._connections[ctrl_conn_id].send_json(payload)
+
+        # Only resurrect the device to ONLINE if it's currently BUSY. An agent
+        # that disconnected is already marked OFFLINE by _cleanup() before
+        # close_all_for_device() runs — this must not override that back to
+        # ONLINE just because its now-orphaned sessions are being torn down.
+        device = await device_registry.get(session.device_id)
+        if device and device.status == DeviceStatus.BUSY:
+            await device_registry.set_status(session.device_id, DeviceStatus.ONLINE)
+
+        # Only decrement if this session was ever actually counted: the
+        # counter is incremented in _handle_session_accept exactly when
+        # activated_at gets set, so a session that was rejected or timed
+        # out before handshake completion was never counted in the first
+        # place and must not decrement someone else's active session.
+        if session.activated_at is not None and self._stats.active_sessions > 0:
             self._stats.active_sessions -= 1
 
     async def _route_binary(self, conn: Connection, data: bytes) -> None:
@@ -470,21 +564,21 @@ class RelayServer:
         if not session or session.state != SessionState.ACTIVE:
             return
 
-        # Security: verify the sender is authorised for this session
-        if conn.identity_type == "controller":
-            if session.controller_id != conn.user_id:
-                log.warning("relay.unauthorized_frame",
-                            conn_id=conn.conn_id,
-                            session_id=session_id)
-                return
-            await session.handle_from_controller(payload)
-        else:
-            if session.device_id != conn.device_id:
-                log.warning("relay.unauthorized_frame",
-                            conn_id=conn.conn_id,
-                            session_id=session_id)
-                return
-            await session.handle_from_agent(payload)
+        # Binary frames are agent-only: the agent's ECDH+AES-GCM cipher
+        # protects the relay<->agent hop. The browser controller never
+        # sends binary — it has no way to produce that ciphertext, since
+        # its leg is a separate trust boundary secured by wss:// TLS
+        # instead (see core.session.Session.attach_controller's docstring
+        # for the full reasoning). A binary frame arriving from a
+        # controller connection is therefore unexpected; ignore it rather
+        # than routing it into a decrypt call that was never meant for it.
+        if conn.identity_type != "agent" or session.device_id != conn.device_id:
+            log.warning("relay.unauthorized_frame",
+                        conn_id=conn.conn_id,
+                        identity_type=conn.identity_type,
+                        session_id=session_id)
+            return
+        await session.handle_from_agent(payload)
 
     async def _handle_metrics(self, conn: Connection, msg: dict) -> None:
         from core.registry import DeviceMetrics
@@ -545,10 +639,36 @@ class RelayServer:
 
 
 # ---------------------------------------------------------------------------
-# CLI entrypoint
+# Programmatic Entrypoint (Invoked by setup_and_launch / PyInstaller)
 # ---------------------------------------------------------------------------
 
-async def _main() -> None:
+def main(host: str = settings.relay.host, port: int = settings.relay.port) -> None:
+    """
+    Main entrypoint imported by setup_and_launch.py or executed directly.
+    Instantiates and runs the RelayServer on the current event loop.
+    """
+    settings.relay.host = host
+    settings.relay.port = port
+    settings.ensure_dirs()
+
+    relay = RelayServer()
+
+    async def _run():
+        await relay.start()
+        log.info("relay.running", host=host, port=port)
+        await asyncio.Future()  # Run indefinitely
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        pass
+    except RuntimeError:
+        # Fallback if event loop is already active
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(_run())
+
+
+if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="NEXUS Relay Server")
@@ -556,16 +676,4 @@ async def _main() -> None:
     parser.add_argument("--port", type=int, default=settings.relay.port)
     args = parser.parse_args()
 
-    # Override settings from CLI
-    settings.relay.host = args.host
-    settings.relay.port = args.port
-    settings.ensure_dirs()
-
-    relay = RelayServer()
-    await relay.start()
-    log.info("relay.running", host=args.host, port=args.port)
-    await asyncio.Future()   # run forever
-
-
-if __name__ == "__main__":
-    asyncio.run(_main())
+    main(host=args.host, port=args.port)

@@ -15,6 +15,7 @@ and a target device (agent). It coordinates:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from enum import Enum
@@ -139,7 +140,21 @@ class Session:
     # Connection wiring
     # ------------------------------------------------------------------
 
-    def attach_controller(self, send_fn: Callable[[bytes], Coroutine]) -> None:
+    def attach_controller(self, send_fn: Callable[[dict], Coroutine]) -> None:
+        """
+        send_fn delivers a PLAINTEXT dict (JSON) to the controller's WebSocket.
+
+        This is intentionally NOT the same contract as attach_agent(). The
+        controller (browser) is never a party to this session's ECDH
+        handshake — Session.__init__ creates its own ephemeral keypair and
+        completes the handshake directly against the AGENT (see
+        complete_handshake() below and relay.py's _handle_session_accept).
+        The browser has no way to derive that shared key, so sending it
+        AES-GCM ciphertext is undecryptable by design, not by bug — it
+        would just be silently dropped on arrival. The controller leg is
+        instead protected by the outer wss:// TLS transport, matching the
+        agent leg's own encryption for the relay<->agent hop.
+        """
         self._controller_send = send_fn
 
     def attach_agent(self, send_fn: Callable[[bytes], Coroutine]) -> None:
@@ -170,13 +185,32 @@ class Session:
     # Message routing
     # ------------------------------------------------------------------
 
-    async def handle_from_controller(self, raw: bytes) -> None:
-        """Controller → agent path."""
+    async def handle_from_controller_plaintext(self, msg_dict: dict) -> None:
+        """
+        Controller → agent path.
+
+        The browser sends plain JSON — {"type": ..., "session_id": ...,
+        "payload": {...}} — matching MessageType values directly (see
+        dashboard.html's sendSessionMsg()). This builds the SessionMessage
+        from that dict and hands it to _route_to_agent(), which is the
+        part that actually encrypts it before it goes anywhere near the
+        agent's WebSocket. Nothing arrives here already encrypted, because
+        nothing on the browser side is capable of producing that ciphertext
+        (see attach_controller's docstring for why).
+        """
         if self.state != SessionState.ACTIVE:
             return
-        msg = self._decrypt_message(raw)
-        self.bytes_received += len(raw)
-        await self._route_to_agent(msg, raw)
+        try:
+            msg = SessionMessage(
+                type=msg_dict.get("type"),
+                session_id=self.session_id,
+                payload=msg_dict.get("payload"),
+            )
+        except Exception as e:
+            log.warning("session.bad_controller_message", session_id=self.session_id, error=str(e))
+            return
+        self.bytes_received += len(json.dumps(msg_dict))
+        await self._route_to_agent(msg, b"")
 
     async def handle_from_agent(self, raw: bytes) -> None:
         """Agent → controller path."""
@@ -214,10 +248,17 @@ class Session:
             self.bytes_sent += len(encrypted)
 
     async def _route_to_controller(self, msg: SessionMessage, raw: bytes) -> None:
+        """
+        Agent → controller path. `msg` has already been decrypted (by
+        handle_from_agent, using the session's real agent-side cipher) by
+        the time it reaches here. It is forwarded to the browser as plain
+        JSON — see attach_controller()'s docstring for why re-encrypting
+        it would just produce ciphertext the browser can never open.
+        """
         if self._controller_send:
-            encrypted = self._encrypt_message(msg)
-            await self._controller_send(encrypted)
-            self.bytes_sent += len(encrypted)
+            data = msg.model_dump(mode="json")
+            await self._controller_send(data)
+            self.bytes_sent += len(json.dumps(data))
             if msg.type == MessageType.SCREEN_FRAME:
                 self.frames_sent += 1
 
@@ -299,6 +340,30 @@ class SessionManager:
     def __init__(self):
         self._sessions: Dict[str, Session] = {}
         self._lock = asyncio.Lock()
+        self._close_listeners: List[Callable[[Session, str], Coroutine]] = []
+
+    def on_close(self, callback: Callable[[Session, str], Coroutine]) -> None:
+        """
+        Register a callback fired whenever a session closes, regardless of
+        which code path triggered it — relay.py's own WS session.close
+        handler, an idle-session sweep, an agent disconnecting (cascading
+        via close_all_for_device), or an external caller such as the
+        dashboard's DELETE /sessions/{id} REST endpoint.
+
+        This is the single place responsible for notifying the controller
+        and agent WebSocket connections that a session ended. Callers of
+        close() don't need direct access to relay.py's connection registry
+        to trigger that notification — relay.py registers itself as a
+        listener here instead (see RelayServer.__init__).
+        """
+        self._close_listeners.append(callback)
+
+    async def _notify_close(self, session: Session, reason: str) -> None:
+        for cb in self._close_listeners:
+            try:
+                await cb(session, reason)
+            except Exception as e:
+                log.error("session_manager.close_listener_error", error=str(e))
 
     async def create(
         self,
@@ -326,6 +391,7 @@ class SessionManager:
         session = self._sessions.get(session_id)
         if session:
             await session.close(reason=reason)
+            await self._notify_close(session, reason)
             async with self._lock:
                 self._sessions.pop(session_id, None)
 

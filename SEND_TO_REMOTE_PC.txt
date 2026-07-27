@@ -6,10 +6,10 @@ STEP 1: Install Python from https://www.python.org/downloads/
 
 STEP 2: Open Command Prompt inside the nexus-ras-v2 folder and run:
 
-  python connect_remote.py --relay ws://122.183.33.32:7000 --token U6mRE6XmwwW-5FSjpkd-IBygr3sZu_TVOeoRoQbBBOQ
+  python connect_remote.py --relay wss://122.183.33.32:7000 --token U6mRE6XmwwW-5FSjpkd-IBygr3sZu_TVOeoRoQbBBOQ
 
 That's it — everything else is automatic.
 
 ======================================================
-Relay URL   : ws://122.183.33.32:7000
+Relay URL   : wss://122.183.33.32:7000
 Agent Token : U6mRE6XmwwW-5FSjpkd-IBygr3sZu_TVOeoRoQbBBOQ

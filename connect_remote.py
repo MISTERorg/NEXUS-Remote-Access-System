@@ -17,10 +17,32 @@ The file SEND_TO_REMOTE_PC.txt (sent by the controller) does the rest.
 
 If the file cannot be found anywhere, it falls back to asking for the
 relay URL and token interactively as a last resort.
+
+NOTE ON WHO CATCHES CRASHES:
+  When packaged as nexus_agent.exe, this file is imported as a module by
+  nexus_agent_entry.py and its main() is called directly — NOT executed
+  via `python connect_remote.py`. That means the `if __name__=="__main__"`
+  guard at the bottom of THIS file never runs in the shipped exe; it only
+  helps when a developer runs this script directly. The guard in
+  nexus_agent_entry.py is what actually protects the packaged exe. Both
+  are kept, for defense in depth.
+
+Windows console hardening (fixes silent-crash-on-launch bug):
+  PyInstaller --onefile console apps on Windows inherit the machine's legacy
+  console codepage (cp1252 / cp437) unless explicitly told otherwise. This
+  script prints Unicode symbols (✓ → ⚠ ✗ ─ █ ═ ║) for readability, which
+  raises an unhandled UnicodeEncodeError on any codepage that doesn't
+  include them — and because PyInstaller onefile windows close the instant
+  the process exits, that crash is invisible: the window just vanishes.
+  Fix: switch the console to UTF-8 (chcp 65001) AND reconfigure stdout/
+  stderr with errors="replace" as a belt-and-braces fallback, and route
+  every print through a safe wrapper that can never itself raise.
 """
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import hashlib
 import os
 import platform
@@ -30,18 +52,60 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
-# ── colours (zero dependencies) ──────────────────────────────────────────────
+# ── Windows console hardening — MUST run before any print() call ─────────────
 if sys.platform == "win32":
-    os.system("color")
+    try:
+        # Switch the console's active code page to UTF-8. chcp modifies the
+        # console session (shared by parent + child processes), so running
+        # it via os.system from here does take effect for our own prints.
+        os.system("chcp 65001 >NUL 2>&1")
+    except Exception:
+        pass
+    try:
+        os.system("color")   # enable ANSI/VT100 escape processing
+    except Exception:
+        pass
+    try:
+        # Belt-and-braces: force stdout/stderr to encode as UTF-8 regardless
+        # of what codepage the console actually ends up in, and NEVER raise
+        # on an unencodable character — replace it with '?' instead of
+        # crashing the whole process.
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
-def _c(code, t): return f"\033[{code}m{t}\033[0m"
-def ok(m):    print(_c("92",   f"  ✓  {m}"))
-def info(m):  print(_c("96",   f"  →  {m}"))
-def warn(m):  print(_c("93",   f"  ⚠  {m}"))
-def err(m):   print(_c("91",   f"  ✗  {m}"))
-def hdr(m):   print(_c("1;96", f"\n{'─'*54}\n  {m}\n{'─'*54}"))
-def dim(m):   print(_c("2",    f"     {m}"))
+
+def _c(code, t):
+    return f"\033[{code}m{t}\033[0m"
+
+
+def _safe_print(s: str = "", **kwargs) -> None:
+    """
+    Print that can never crash the process. If somehow a character still
+    can't be encoded (e.g. reconfigure() unavailable on some embedded
+    Python builds), fall back to a plain ASCII-safe rendering rather than
+    raising and killing the console window.
+    """
+    try:
+        print(s, **kwargs)
+    except UnicodeEncodeError:
+        try:
+            print(s.encode("ascii", errors="replace").decode("ascii"), **kwargs)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def ok(m):   _safe_print(_c("92",   f"  \u2713  {m}"))     # ✓
+def info(m): _safe_print(_c("96",   f"  \u2192  {m}"))     # →
+def warn(m): _safe_print(_c("93",   f"  \u26a0  {m}"))     # ⚠
+def err(m):  _safe_print(_c("91",   f"  \u2717  {m}"))     # ✗
+def hdr(m):  _safe_print(_c("1;96", f"\n{chr(0x2500)*54}\n  {m}\n{chr(0x2500)*54}"))
+def dim(m):  _safe_print(_c("2",    f"     {m}"))
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -77,31 +141,39 @@ def _candidate_dirs() -> list[Path]:
     if sys.platform == "win32":
         import string
         for letter in string.ascii_uppercase:
-            drive = Path(f"{letter}:\\")
-            if drive.exists():
-                candidates += [
-                    drive,
-                    drive / "nexus-ras-v2",
-                    drive / "NEXUS",
-                ]
+            try:
+                drive = Path(f"{letter}:\\")
+                if drive.exists():
+                    candidates += [
+                        drive,
+                        drive / "nexus-ras-v2",
+                        drive / "NEXUS",
+                    ]
+            except Exception:
+                continue
 
     # Linux/macOS: common mount points
     else:
-        for mount in Path("/media").glob("*/*") if Path("/media").exists() else []:
-            candidates.append(mount)
-        for mount in Path("/Volumes").glob("*") if Path("/Volumes").exists() else []:
-            candidates.append(mount)
-        for mount in Path("/mnt").glob("*") if Path("/mnt").exists() else []:
-            candidates.append(mount)
+        for mount_path in ("/media", "/Volumes", "/mnt"):
+            p = Path(mount_path)
+            if p.exists():
+                try:
+                    for sub in p.glob("*"):
+                        candidates.append(sub)
+                except Exception:
+                    pass
 
     # Deduplicate while preserving order
     seen = set()
     unique = []
     for p in candidates:
-        rp = str(p.resolve()) if p.exists() else str(p)
-        if rp not in seen:
-            seen.add(rp)
-            unique.append(p)
+        try:
+            rp = str(p.resolve()) if p.exists() else str(p)
+            if rp not in seen:
+                seen.add(rp)
+                unique.append(p)
+        except Exception:
+            continue
     return unique
 
 
@@ -135,7 +207,7 @@ def find_config_file() -> Path | None:
                     if deep.exists():
                         ok(f"Found: {deep}")
                         return deep
-        except PermissionError:
+        except (PermissionError, OSError):
             continue
 
     warn(f"Could not find {CONFIG_FILENAME} in any of these locations:")
@@ -153,13 +225,6 @@ def find_config_file() -> Path | None:
 def parse_config_file(path: Path) -> dict:
     """
     Extract Relay URL and Agent Token from SEND_TO_REMOTE_PC.txt.
-
-    Handles multiple formats:
-      Relay URL   : ws://1.2.3.4:7000
-      Agent Token : abc123...
-      --relay ws://1.2.3.4:7000
-      --token abc123...
-      ws://1.2.3.4:7000          (bare URL on any line)
     """
     hdr("Reading Connection File")
     content = path.read_text(encoding="utf-8", errors="replace")
@@ -167,12 +232,12 @@ def parse_config_file(path: Path) -> dict:
 
     result = {}
 
-    # ── Pattern 1: "Relay URL   : ws://..." (our standard format) ────────────
+    # ── Pattern 1: "Relay URL   : ws://..." ──────────────────────────────────
     m = re.search(r"Relay URL\s*:\s*(wss?://[^\s]+)", content, re.IGNORECASE)
     if m:
         result["relay"] = m.group(1).strip()
 
-    m = re.search(r"Agent Token\s*:\s*([A-Za-z0-9_\-]{20,})", content, re.IGNORECASE)
+    m = re.search(r"Agent Token\s*:\s*([A-Za-z0-9_\-=]{20,})", content, re.IGNORECASE)
     if m:
         result["token"] = m.group(1).strip()
 
@@ -183,23 +248,21 @@ def parse_config_file(path: Path) -> dict:
             result["relay"] = m.group(1).strip()
 
     if "token" not in result:
-        m = re.search(r"--token\s+([A-Za-z0-9_\-]{20,})", content)
+        m = re.search(r"--token\s+([A-Za-z0-9_\-=]{20,})", content)
         if m:
             result["token"] = m.group(1).strip()
 
-    # ── Pattern 3: bare ws:// URL anywhere on a line ─────────────────────────
+    # ── Pattern 3: bare ws:// or wss:// URL anywhere ─────────────────────────
     if "relay" not in result:
-        m = re.search(r"(wss?://[\d\.a-zA-Z\-]+:\d+)", content)
+        m = re.search(r"(wss?://[^\s]+)", content)
         if m:
             result["relay"] = m.group(1).strip()
 
-    # ── Pattern 4: bare token — long alphanumeric string not a URL ───────────
+    # ── Pattern 4: bare token ────────────────────────────────────────────────
     if "token" not in result:
-        # Look for a standalone base64url-ish string of 30+ chars on its own line
         for line in content.splitlines():
             line = line.strip()
-            # Skip lines that are URLs, labels, or too short
-            if re.fullmatch(r"[A-Za-z0-9_\-]{30,}", line):
+            if re.fullmatch(r"[A-Za-z0-9_\-=]{20,}", line) and not line.startswith("http"):
                 result["token"] = line
                 break
 
@@ -210,7 +273,7 @@ def parse_config_file(path: Path) -> dict:
         warn("Could not extract Relay URL from file")
 
     if "token" in result:
-        masked = result["token"][:8] + "..." + result["token"][-4:]
+        masked = result["token"][:8] + "..." + result["token"][-4:] if len(result["token"]) > 12 else "***"
         ok(f"Agent Token : {masked}  (masked for security)")
     else:
         warn("Could not extract Agent Token from file")
@@ -225,11 +288,11 @@ def parse_config_file(path: Path) -> dict:
 def ask_for_credentials() -> dict:
     """Last resort — prompt the user for relay + token."""
     warn("Falling back to manual entry.")
-    print()
-    print(_c("93", "  Ask the person helping you to send you:"))
-    print(_c("93", "    1. The Relay URL  (looks like: ws://12.34.56.78:7000)"))
-    print(_c("93", "    2. The Agent Token (a long random string)"))
-    print()
+    _safe_print()
+    _safe_print(_c("93", "  Ask the person helping you to send you:"))
+    _safe_print(_c("93", "    1. The Relay URL  (looks like: ws://12.34.56.78:7000)"))
+    _safe_print(_c("93", "    2. The Agent Token (a long random string)"))
+    _safe_print()
 
     relay = ""
     while not relay.startswith("ws"):
@@ -257,11 +320,9 @@ def get_credentials() -> dict:
 
     if config_path:
         creds = parse_config_file(config_path)
-        # Both found — fully automatic
         if creds.get("relay") and creds.get("token"):
             ok("All connection details found automatically — no input needed!")
             return creds
-        # Partially parsed — fill in what's missing
         warn("File found but could not parse all details.")
         if not creds.get("relay"):
             err("Missing: Relay URL")
@@ -271,7 +332,6 @@ def get_credentials() -> dict:
             creds["token"] = input(_c("96", "  Paste Agent Token > ")).strip()
         return creds
 
-    # File not found at all
     warn(f"{CONFIG_FILENAME} was not found on this PC.")
     warn("Make sure you copied the whole nexus-ras-v2 folder including that file.")
     return ask_for_credentials()
@@ -318,6 +378,10 @@ PACKAGES = {
 
 def install_packages() -> None:
     hdr("Installing Required Components")
+    if getattr(sys, 'frozen', False):
+        info("Running as frozen executable — all components are bundled, skipping install")
+        return
+
     to_install = []
     for import_name, pip_spec in PACKAGES.items():
         try:
@@ -332,40 +396,26 @@ def install_packages() -> None:
     info(f"Installing {len(to_install)} component(s) — please wait...")
 
     proc = subprocess.Popen(
-        [sys.executable, "-m", "pip", "install", "--quiet",
-         "--disable-pip-version-check"] + to_install,
+        [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check"] + to_install,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     spinner = "|/-\\"
     i = 0
     while proc.poll() is None:
-        print(f"\r  {_c('96', spinner[i % 4])}  Installing...", end="", flush=True)
+        _safe_print(f"\r  {_c('96', spinner[i % 4])}  Installing...", end="", flush=True)
         time.sleep(0.15)
         i += 1
-    print("\r" + " " * 40 + "\r", end="")
+    _safe_print("\r" + " " * 40 + "\r", end="")
     _, stderr = proc.communicate()
 
     if proc.returncode != 0:
         err("Installation failed:")
-        print(stderr.decode(errors="replace")[:500])
+        _safe_print(stderr.decode(errors="replace")[:500])
         input("\nPress Enter to exit...")
         sys.exit(1)
 
     ok(f"Installed {len(to_install)} component(s) successfully")
-
-    # Verify
-    still_missing = [n for n in PACKAGES if __import_safe(n) is False]
-    if still_missing:
-        warn(f"Restart may be needed for: {', '.join(still_missing)}")
-
-
-def __import_safe(name: str) -> bool:
-    try:
-        __import__(name)
-        return True
-    except ImportError:
-        return False
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -390,10 +440,13 @@ def check_project_files() -> None:
         err("nexus-ras-v2.zip and are running connect_remote.py from inside it.")
         err(f"Current location: {BASE_DIR}")
         for f in missing:
-            dim(f"Missing: {f.relative_to(BASE_DIR)}")
+            try:
+                dim(f"Missing: {f.relative_to(BASE_DIR)}")
+            except ValueError:
+                dim(f"Missing: {f}")
         input("\nPress Enter to exit...")
         sys.exit(1)
-    ok(f"All project files present")
+    ok("All project files present")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -445,9 +498,12 @@ def get_device_name() -> str:
 def check_relay_reachable(relay_url: str) -> None:
     hdr("Testing Connection to Controller")
     try:
-        url = relay_url.replace("ws://", "").replace("wss://", "")
-        host = url.split(":")[0]
-        port = int(url.split(":")[1].split("/")[0])
+        parsed = urlparse(relay_url)
+        host = parsed.hostname or "127.0.0.1"
+        if parsed.port:
+            port = parsed.port
+        else:
+            port = 443 if parsed.scheme == "wss" else 7000
     except Exception:
         warn("Could not parse relay URL — will attempt connection anyway")
         return
@@ -455,13 +511,11 @@ def check_relay_reachable(relay_url: str) -> None:
     info(f"Pinging {host}:{port}...")
     for attempt in range(1, 6):
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5)
-            if s.connect_ex((host, port)) == 0:
-                s.close()
-                ok(f"Controller is reachable at {host}:{port}")
-                return
-            s.close()
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5)
+                if s.connect_ex((host, port)) == 0:
+                    ok(f"Controller is reachable at {host}:{port}")
+                    return
         except Exception:
             pass
         if attempt < 5:
@@ -495,17 +549,18 @@ def run_agent(relay_url: str, token: str, device_id: str, device_name: str) -> N
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
-    import asyncio
+    os.environ["NEXUS_RELAY_URL"] = relay_url
+    os.environ["NEXUS_AGENT_TOKEN"] = token
 
-    print()
-    print(_c("1;92", "  ✓  All set! The helper can now access this PC."))
-    print()
-    print(_c("2",   f"     Device    : {device_name}"))
-    print(_c("2",   f"     Device ID : {device_id}"))
-    print(_c("2",   f"     Relay     : {relay_url}"))
-    print()
-    print(_c("93",   "  Keep this window open while the helper is working."))
-    print(_c("93",   "  Close this window at any time to disconnect them.\n"))
+    _safe_print()
+    _safe_print(_c("1;92", "  \u2713  All set! The helper can now access this PC."))
+    _safe_print()
+    _safe_print(_c("2",   f"     Device    : {device_name}"))
+    _safe_print(_c("2",   f"     Device ID : {device_id}"))
+    _safe_print(_c("2",   f"     Relay     : {relay_url}"))
+    _safe_print()
+    _safe_print(_c("93",   "  Keep this window open while the helper is working."))
+    _safe_print(_c("93",   "  Close this window at any time to disconnect them.\n"))
 
     try:
         from agents.desktop_agent import DesktopAgent
@@ -515,12 +570,17 @@ def run_agent(relay_url: str, token: str, device_id: str, device_name: str) -> N
         input("\nPress Enter to exit...")
         sys.exit(1)
 
+    # NOTE: DesktopAgent (agents/desktop_agent.py) subclasses BaseAgent
+    # (agents/base_agent.py), whose __init__ signature is:
+    #     (relay_url, device_id, device_name, agent_token,
+    #      jpeg_quality=60, frame_scale=1.0)
+    # There is no `ghost_mode` parameter — passing one raises a TypeError
+    # immediately after a successful relay connection. Removed below.
     agent = DesktopAgent(
         relay_url=relay_url,
         device_id=device_id,
         device_name=device_name,
         agent_token=token,
-        ghost_mode=False,
     )
 
     async def _run():
@@ -528,28 +588,30 @@ def run_agent(relay_url: str, token: str, device_id: str, device_name: str) -> N
         while True:
             try:
                 await agent.run()
+                break  # agent.run() returned normally (stopped) — don't loop forever
+            except asyncio.CancelledError:
+                break
             except KeyboardInterrupt:
                 raise
             except Exception:
                 attempt += 1
                 wait = min(5 * attempt, 60)
-                print(_c("93", f"\r  ⚠  Lost connection. Reconnecting in {wait}s..."), end="")
+                _safe_print(_c("93", f"\r  \u26a0  Lost connection. Reconnecting in {wait}s..."), end="")
                 await asyncio.sleep(wait)
-                print(f"\r  →  Reconnecting...{' ' * 30}")
+                _safe_print(f"\r  \u2192  Reconnecting...{' ' * 30}")
 
     try:
         asyncio.run(_run())
     except KeyboardInterrupt:
-        print(_c("93", "\n\n  Disconnected. Window can be closed."))
+        _safe_print(_c("93", "\n\n  Disconnected. Window can be closed."))
         sys.exit(0)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# MAIN — fully automatic, no args required
+# MAIN
 # ════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
-    import argparse
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--relay",     default=None)
     parser.add_argument("--token",     default=None)
@@ -557,33 +619,30 @@ def main() -> None:
     parser.add_argument("--device-id", default=None)
     args, _ = parser.parse_known_args()
 
-    print(_c("1;96", """
-  ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗
-  ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝
-  ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗
-  ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║
-  ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║
-  ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝
-  Remote Support — Setting everything up automatically...
+    _safe_print(_c("1;96", """
+  \u2588\u2588\u2588\u2557   \u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2557  \u2588\u2588\u2557\u2588\u2588\u2557   \u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557
+  \u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u255a\u2588\u2588\u2557\u2588\u2588\u2554\u255d\u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d
+  \u2588\u2588\u2554\u2588\u2588\u2557 \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2557   \u255a\u2588\u2588\u2588\u2554\u255d \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557
+  \u2588\u2588\u2551\u255a\u2588\u2588\u2557\u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u255d   \u2588\u2588\u2554\u2588\u2588\u2557 \u2588\u2588\u2551   \u2588\u2588\u2551\u255a\u2550\u2550\u2550\u2550\u2588\u2588\u2551
+  \u2588\u2588\u2551 \u255a\u2588\u2588\u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2554\u255d \u2588\u2588\u2557\u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551
+  \u255a\u2550\u255d  \u255a\u2550\u2550\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u255d  \u255a\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d
+  Remote Support \u2014 Setting everything up automatically...
 """))
 
-    # ── Run all checks ────────────────────────────────────────────────────────
+    # ── Run checks ────────────────────────────────────────────────────────────
     check_python()
     install_packages()
     check_project_files()
     write_agent_env()
 
-    # ── Get credentials — from file, or CLI args, or interactive ─────────────
+    # ── Get credentials ───────────────────────────────────────────────────────
     if args.relay and args.token:
-        # Explicit CLI flags override everything (for advanced use)
         hdr("Using Provided Connection Details")
         ok(f"Relay URL   : {args.relay}")
         ok(f"Agent Token : {args.token[:8]}...")
         creds = {"relay": args.relay, "token": args.token}
     else:
-        # Fully automatic: search for SEND_TO_REMOTE_PC.txt
         creds = get_credentials()
-        # Merge any CLI overrides
         if args.relay:
             creds["relay"] = args.relay
         if args.token:
@@ -595,13 +654,35 @@ def main() -> None:
     device_id   = args.device_id or get_device_id()
     device_name = args.name      or get_device_name()
 
-    # ── Verify connection before starting ────────────────────────────────────
+    # ── Verify connection & launch ───────────────────────────────────────────
     check_relay_reachable(relay_url)
-
-    # ── Launch ───────────────────────────────────────────────────────────────
     hdr("Starting Remote Support Agent")
     run_agent(relay_url, token, device_id, device_name)
 
 
 if __name__ == "__main__":
-    main()
+    # Defense in depth for direct `python connect_remote.py` usage. Note this
+    # guard does NOT run when nexus_agent.exe calls agent_main() via import
+    # (see nexus_agent_entry.py) — that file has its own top-level guard,
+    # which is what actually protects the packaged exe.
+    try:
+        main()
+    except KeyboardInterrupt:
+        _safe_print("\n\nInterrupted by user.")
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        _safe_print("\n" + "=" * 60)
+        _safe_print("  FATAL ERROR \u2014 NEXUS Agent crashed")
+        _safe_print("=" * 60)
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+        _safe_print("=" * 60)
+        try:
+            input("\nPress Enter to exit...")
+        except Exception:
+            pass
+        sys.exit(1)

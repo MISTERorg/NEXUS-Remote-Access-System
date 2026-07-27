@@ -1,20 +1,33 @@
 """
 ui/dashboard.py
 ---------------
-NEXUS Web Dashboard — FastAPI-powered REST API + WebSocket relay for the browser UI.
+NEXUS Web Dashboard — FastAPI REST API for auth, device listing, and
+read-only session listing.
+
+Session creation, session closing, and all session-scoped traffic (screen
+frames, input, terminal, file, clipboard) are now owned ENTIRELY by
+core/relay.py's own WebSocket listener — the browser connects directly to
+the relay (see relay.py's _handle_session_request / _CONTROLLER_SESSION_MSG_TYPES),
+not to this process. This file used to also expose a POST /sessions +
+/ws/controller pair that created Session objects in-process, but that path
+had no way to reach relay.py's in-memory agent-connection registry to
+actually notify the agent a session existed — sessions created that way
+were created (visible in session_manager) but never went ACTIVE. Removed
+rather than left as a trap; GET /sessions is kept since it's a harmless
+read of the same shared session_manager singleton regardless of which
+process created the session.
 
 Endpoints:
   POST   /auth/login            — get JWT tokens
   POST   /auth/refresh          — refresh access token
   POST   /auth/logout           — revoke token
+  POST   /auth/register         — admin-only: create a new operator user
   GET    /devices               — list all registered devices
   GET    /devices/{id}          — device detail + metrics
   GET    /devices/search/{query}— search devices by query
-  POST   /sessions              — open a new remote session
-  DELETE /sessions/{id}       — close a session
-  GET    /sessions              — list active sessions
-  WS     /ws/controller         — controller WebSocket (proxies to relay)
+  GET    /sessions              — list active sessions (read-only)
   GET    /health                — health check
+  GET    /console                — serve dashboard.html
 
 Start with:
     uvicorn ui.dashboard:app --host 0.0.0.0 --port 8080 --reload
@@ -22,11 +35,11 @@ Start with:
 
 from __future__ import annotations
 
-import json
+import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -34,7 +47,7 @@ from pydantic import BaseModel
 
 from config.settings import settings
 from core.auth import AuthError, Role, auth_service
-from core.registry import DeviceStatus, device_registry
+from core.registry import device_registry
 from core.session import session_manager
 from utils.logger import get_logger, setup_logging
 
@@ -63,10 +76,28 @@ app.add_middleware(
 bearer_scheme = HTTPBearer()
 
 
+def _get_bundle_dir() -> Path:
+    """Get base directory for static assets, supporting frozen builds and dev mode."""
+    if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            return Path(sys._MEIPASS)
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
+
+_BUNDLE_DIR = _get_bundle_dir()
+_MODULE_DIR = Path(__file__).resolve().parent
+
 _CONSOLE_CANDIDATES = [
-    Path(__file__).resolve().parent / "dashboard.html",
-    Path(__file__).resolve().parent / "console.html",
-    Path(__file__).resolve().parent.parent / "dashboard.html",
+    # PyInstaller / frozen executable paths
+    _BUNDLE_DIR / "ui" / "dashboard.html",
+    _BUNDLE_DIR / "dashboard.html",
+    Path(sys.executable).parent / "ui" / "dashboard.html",
+    Path(sys.executable).parent / "dashboard.html",
+    # Local dev / source paths
+    _MODULE_DIR / "dashboard.html",
+    _MODULE_DIR / "console.html",
+    _MODULE_DIR.parent / "dashboard.html",
 ]
 
 
@@ -182,43 +213,15 @@ async def search_devices(query: str, payload=Depends(require_auth)):
     return {"devices": [d.model_dump() for d in devices]}
 
 
-class SessionRequest(BaseModel):
-    device_id: str
-
-
-@app.post("/sessions")
-async def create_session(req: SessionRequest, payload=Depends(require_auth)):
-    from core.auth import Role, has_permission
-    if not has_permission(Role(payload.role), "session.open"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied: session.open")
-
-    device = await device_registry.get(req.device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-    if device.status == DeviceStatus.OFFLINE:
-        raise HTTPException(status_code=409, detail="Device is offline")
-
-    session = await session_manager.create(
-        controller_id=payload.sub,
-        device_id=req.device_id,
-        controller_role=Role(payload.role),
-    )
-    return {"session_id": session.session_id, "state": session.state}
-
-
-@app.delete("/sessions/{session_id}")
-async def close_session(session_id: str, payload=Depends(require_auth)):
-    session = await session_manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if session.controller_id != payload.sub and payload.role != Role.ADMIN.value:
-        raise HTTPException(status_code=403, detail="Not your session")
-    await session_manager.close(session_id, reason="api_closed")
-    return {"status": "closed", "session_id": session_id}
-
-
 @app.get("/sessions")
 async def list_sessions(payload=Depends(require_auth)):
+    """
+    Read-only. Sessions themselves are created/closed via relay.py's own
+    WebSocket listener now — this just reads the same shared session_manager
+    singleton (same process, see setup_and_launch.py) so the dashboard's
+    Active Sessions view stays accurate regardless of which connection
+    created a given session.
+    """
     sessions = await session_manager.list_active()
     return {"sessions": [s.summary() for s in sessions]}
 
@@ -236,52 +239,3 @@ async def health():
         "devices_online": len(online_devs),
         "active_sessions": len(active_sess),
     }
-
-
-@app.websocket("/ws/controller")
-async def websocket_controller(websocket: WebSocket):
-    await websocket.accept()
-    authenticated_payload = None
-    try:
-        init_data = await websocket.receive_text()
-        msg = json.loads(init_data)
-        token = msg.get("token")
-        if not token:
-            await websocket.send_json({"type": "error", "message": "Missing token"})
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-
-        authenticated_payload = auth_service.verify_access_token(token)
-        await websocket.send_json({"type": "auth.ok", "user_id": authenticated_payload.sub})
-
-        while True:
-            raw_text = await websocket.receive_text()
-            data = json.loads(raw_text)
-            msg_type = data.get("type")
-            session_id = data.get("session_id")
-            payload_data = data.get("payload")
-
-            if session_id:
-                session = await session_manager.get(session_id)
-                if session:
-                    if msg_type == "terminal_data" and payload_data:
-                        log.info("terminal.command", session_id=session_id, cmd=str(payload_data)[:80])
-                        await websocket.send_json({
-                            "type": "terminal_data",
-                            "session_id": session_id,
-                            "payload": f"Executing: {payload_data}"
-                        })
-                    elif msg_type == "file_list":
-                        await websocket.send_json({
-                            "type": "file_list",
-                            "session_id": session_id,
-                            "payload": []
-                        })
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        log.error("websocket.error", error=str(e))
-        try:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        except Exception:
-            pass

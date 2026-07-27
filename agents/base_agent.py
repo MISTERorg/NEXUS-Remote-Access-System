@@ -225,6 +225,26 @@ class BaseAgent(ABC):
         mtype = msg.get("type")
         if mtype == "session.request":
             await self._handle_session_request(msg)
+        elif mtype == "session.close":
+            # Sent by the relay (core/relay.py _handle_session_close) when the
+            # controller ends the session, or when it force-closes one for any
+            # other reason. Without handling this, the agent never learns the
+            # session ended: on_session_end() would not fire, so subclasses
+            # like DesktopAgent never stop their screen-push loop or close
+            # open terminal subprocesses — they'd keep running against a
+            # session the relay already tore down.
+            session_id = msg.get("session_id")
+            if session_id and session_id != self._current_session_id:
+                # Stale/mismatched close for a session we're not currently in
+                # (e.g. a delayed close arriving after we've already moved on
+                # to a new session) — ignore rather than tear down the wrong one.
+                logging.debug(
+                    f"[agent] Ignoring session.close for {session_id}, "
+                    f"current session is {self._current_session_id}"
+                )
+                return
+            logging.info(f"[agent] Session closed by relay: {session_id}")
+            await self._close_session()
         elif mtype == "error":
             logging.warning(f"[agent] Relay error: {msg.get('code')} — {msg.get('message')}")
         # "pong" text frames are handled implicitly by record_pong; ignore here

@@ -3,457 +3,484 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>NEXUS · Operator Console</title>
+<title>NEXUS · Enterprise Remote Control Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:            #0B1016;
-    --bg-raised:     #10161E;
-    --bg-raised-2:   #151D27;
-    --line:          #212B36;
-    --line-soft:     #1A222C;
-    --text:          #E7ECF1;
-    --text-dim:      #8B98A8;
-    --text-faint:    #5C6876;
-    --amber:         #F0A93A;
-    --amber-dim:     #6B4E1E;
-    --cyan:          #3ED6C5;
-    --cyan-dim:      #1E4A46;
-    --red:           #E5566D;
-    --red-dim:       #4A1F27;
-    --radius:        3px;
+    --bg:            #090D12;
+    --bg-raised:     #0F151D;
+    --bg-raised-2:   #161F2C;
+    --line:          #202C3C;
+    --line-soft:     #172230;
+    --text:          #ECF2F8;
+    --text-dim:      #8FA1B5;
+    --text-faint:    #56677A;
+    --amber:         #F5A623;
+    --amber-dim:     #63420E;
+    --cyan:          #00E5FF;
+    --cyan-dim:      #004D56;
+    --green:         #00E676;
+    --green-dim:     #004D27;
+    --red:           #FF5252;
+    --red-dim:       #561B1B;
+    --blue:          #2979FF;
+    --radius:        4px;
     --mono: 'JetBrains Mono', ui-monospace, monospace;
     --head: 'Barlow Condensed', sans-serif;
     --body: 'Inter', sans-serif;
   }
   *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--body);height:100%;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--body);height:100%;overflow:hidden;}
   body{font-size:13px;}
   ::selection{background:var(--amber-dim);color:#fff;}
-  button{font-family:var(--body);cursor:pointer;}
+  button{font-family:var(--body);cursor:pointer;outline:none;}
+  button:disabled{opacity:.45;cursor:not-allowed;filter:none !important;}
   input,select{font-family:var(--mono);}
 
-  /* ---------- Scrollbar ---------- */
-  ::-webkit-scrollbar{width:8px;height:8px;}
+  /* Scrollbars */
+  ::-webkit-scrollbar{width:6px;height:6px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
-  ::-webkit-scrollbar-thumb{background:#26313D;border-radius:4px;}
-  ::-webkit-scrollbar-thumb:hover{background:#33404E;}
+  ::-webkit-scrollbar-thumb{background:#223145;border-radius:3px;}
+  ::-webkit-scrollbar-thumb:hover{background:#324660;}
 
-  /* ================= LOGIN ================= */
+  /* Spinner */
+  .spinner{
+    width:13px;height:13px;border-radius:50%;border:2px solid rgba(255,255,255,.25);
+    border-top-color:currentColor;display:inline-block;animation:spin .7s linear infinite;vertical-align:-2px;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  /* LOGIN SCREEN */
   #login-screen{
     min-height:100vh;display:flex;align-items:center;justify-content:center;
     background:
-      radial-gradient(ellipse 900px 500px at 50% -10%, rgba(240,169,58,0.07), transparent 60%),
+      radial-gradient(ellipse 900px 500px at 50% -10%, rgba(0,229,255,0.08), transparent 60%),
       var(--bg);
   }
   .login-card{
-    width:380px;padding:36px 32px 32px;background:var(--bg-raised);
-    border:1px solid var(--line);border-radius:4px;
-    position:relative;overflow:hidden;
+    width:400px;padding:36px 32px;background:var(--bg-raised);
+    border:1px solid var(--line);border-radius:6px;
+    position:relative;overflow:hidden;box-shadow: 0 20px 50px rgba(0,0,0,0.6);
   }
   .login-card::before{
-    content:"";position:absolute;top:0;left:0;right:0;height:2px;
-    background:linear-gradient(90deg,var(--amber),transparent 70%);
+    content:"";position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,var(--cyan),var(--amber));
   }
-  .login-brand{display:flex;align-items:baseline;gap:10px;margin-bottom:4px;}
+  .login-brand{display:flex;align-items:center;gap:10px;margin-bottom:4px;}
   .login-brand .mark{
-    width:9px;height:9px;background:var(--cyan);border-radius:1px;
-    box-shadow:0 0 8px rgba(62,214,197,0.7);
+    width:12px;height:12px;background:var(--cyan);border-radius:2px;
+    box-shadow:0 0 12px rgba(0,229,255,0.8);
   }
-  .login-brand h1{font-family:var(--head);font-weight:600;font-size:26px;letter-spacing:1px;margin:0;}
-  .login-sub{color:var(--text-faint);font-size:11.5px;margin:2px 0 28px;letter-spacing:.3px;}
+  .login-brand h1{font-family:var(--head);font-weight:700;font-size:28px;letter-spacing:1px;margin:0;}
+  .login-sub{color:var(--text-faint);font-size:11px;margin:2px 0 26px;letter-spacing:.5px;font-weight:600;}
   .field{margin-bottom:14px;}
-  .field label{display:block;font-size:10.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px;}
+  .field label{display:block;font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px;font-weight:600;}
   .field input{
-    width:100%;padding:9px 10px;background:var(--bg);border:1px solid var(--line);
+    width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--line);
     color:var(--text);border-radius:var(--radius);font-size:12.5px;outline:none;transition:border-color .15s;
   }
-  .field input:focus{border-color:var(--amber);}
-  .row-2{display:flex;gap:10px;}
-  .row-2 .field{flex:1;}
+  .field input:focus{border-color:var(--cyan);}
   #login-btn{
-    width:100%;padding:10px;margin-top:6px;background:var(--amber);border:none;
-    color:#181205;font-weight:600;font-size:12.5px;letter-spacing:.4px;border-radius:var(--radius);
-    text-transform:uppercase;transition:filter .15s;
+    width:100%;padding:11px;margin-top:8px;background:var(--cyan);border:none;
+    color:#05131A;font-weight:700;font-size:12.5px;letter-spacing:.5px;border-radius:var(--radius);
+    text-transform:uppercase;transition:filter .15s;display:flex;align-items:center;justify-content:center;gap:8px;
   }
-  #login-btn:hover{filter:brightness(1.08);}
-  #login-btn:disabled{opacity:.5;cursor:default;}
+  #login-btn:hover:not(:disabled){filter:brightness(1.15);}
   .login-error{
-    display:none;margin-top:14px;padding:9px 11px;background:var(--red-dim);border:1px solid #6b2b36;
-    color:#ffb3bf;font-size:11.5px;border-radius:var(--radius);
+    display:none;margin-top:14px;padding:9px 11px;background:var(--red-dim);border:1px solid var(--red);
+    color:#FFCDD2;font-size:11.5px;border-radius:var(--radius);
   }
-  .login-hint{margin-top:18px;font-size:10.5px;color:var(--text-faint);line-height:1.6;border-top:1px solid var(--line-soft);padding-top:14px;}
 
-  /* ================= APP SHELL ================= */
-  #app{display:none;height:100vh;grid-template-columns:210px 1fr;}
+  /* APP SHELL */
+  #app{display:none;height:100vh;grid-template-columns:220px 1fr;}
   #app.active{display:grid;}
 
-  /* ---- Sidebar ---- */
+  /* Sidebar */
   #sidebar{
     background:var(--bg-raised);border-right:1px solid var(--line);
-    display:flex;flex-direction:column;padding:18px 0 14px;
+    display:flex;flex-direction:column;padding:16px 0 14px;
   }
-  .brand{display:flex;align-items:center;gap:8px;padding:0 18px 20px;}
-  .brand .mark{width:8px;height:8px;background:var(--cyan);border-radius:1px;box-shadow:0 0 8px rgba(62,214,197,.7);}
-  .brand span{font-family:var(--head);font-size:19px;font-weight:600;letter-spacing:1.5px;}
-  nav{flex:1;padding:0 10px;}
+  .brand{display:flex;align-items:center;gap:10px;padding:0 18px 18px;}
+  .brand .mark{width:10px;height:10px;background:var(--cyan);border-radius:2px;box-shadow:0 0 10px rgba(0,229,255,.8);}
+  .brand span{font-family:var(--head);font-size:22px;font-weight:700;letter-spacing:1.5px;}
+  nav{flex:1;padding:0 8px;}
   .nav-item{
-    display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--radius);
-    color:var(--text-dim);font-size:12.5px;font-weight:500;margin-bottom:2px;transition:.12s;
-    border-left:2px solid transparent;
+    display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius);
+    color:var(--text-dim);font-size:12.5px;font-weight:500;margin-bottom:3px;transition:.12s;
+    border-left:3px solid transparent;cursor:pointer;
   }
   .nav-item:hover{background:var(--bg-raised-2);color:var(--text);}
-  .nav-item.active{background:var(--bg-raised-2);color:var(--text);border-left-color:var(--amber);}
-  .nav-item .dot{width:5px;height:5px;border-radius:50%;background:var(--text-faint);}
-  .nav-item.active .dot{background:var(--amber);}
+  .nav-item.active{background:var(--bg-raised-2);color:var(--text);border-left-color:var(--cyan);}
+  .nav-item .icon{font-size:14px;width:18px;text-align:center;}
   .nav-count{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);}
 
   .sidebar-foot{padding:12px 18px 0;border-top:1px solid var(--line-soft);margin-top:8px;}
-  .conn-line{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text-faint);margin-bottom:8px;}
-  .conn-pulse{width:6px;height:6px;border-radius:50%;background:var(--cyan);animation:pulse 2s infinite;}
-  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  .conn-line{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text-faint);margin-bottom:10px;}
+  .conn-pulse{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);flex-shrink:0;}
+  .conn-pulse.warn{background:var(--amber);box-shadow:0 0 6px var(--amber);}
+  .conn-pulse.bad{background:var(--red);box-shadow:0 0 6px var(--red);animation:pulse-bad 1s infinite;}
+  @keyframes pulse-bad{0%,100%{opacity:1;}50%{opacity:.35;}}
   #logout-btn{
     width:100%;padding:7px;background:transparent;border:1px solid var(--line);color:var(--text-dim);
     border-radius:var(--radius);font-size:11px;letter-spacing:.3px;
   }
   #logout-btn:hover{border-color:var(--red);color:#ffb3bf;}
 
-  /* ---- Main ---- */
-  #main{display:flex;flex-direction:column;overflow:hidden;}
-  #topbar{
-    display:flex;align-items:center;gap:22px;padding:0 22px;height:52px;
-    border-bottom:1px solid var(--line);flex-shrink:0;background:var(--bg);
-  }
-  #topbar h2{font-family:var(--head);font-size:18px;font-weight:600;letter-spacing:.4px;margin:0;flex-shrink:0;}
-  .stat-chip{display:flex;flex-direction:column;gap:1px;}
-  .stat-chip .v{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text);}
-  .stat-chip .l{font-size:9.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.6px;}
-  .stat-chip .v.on{color:var(--cyan);}
-  .topbar-spacer{flex:1;}
-  #api-base-display{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);}
-  .icon-btn{
-    background:transparent;border:1px solid var(--line);color:var(--text-dim);border-radius:var(--radius);
-    padding:6px 11px;font-size:11px;display:flex;align-items:center;gap:6px;
-  }
-  .icon-btn:hover{border-color:var(--text-dim);color:var(--text);}
+  /* Main Shell */
+  #main{display:flex;flex-direction:column;overflow:hidden;background:var(--bg);}
 
-  #view-container{flex:1;overflow:auto;padding:22px;}
-  .view{display:none;}
+  /* Session Tab Bar */
+  #session-tabs-bar{
+    display:flex;align-items:center;background:#0A0F16;border-bottom:1px solid var(--line);
+    padding:0 12px;height:38px;gap:6px;overflow-x:auto;flex-shrink:0;
+  }
+  .tab-item{
+    display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-raised);
+    border:1px solid var(--line);border-bottom:none;border-radius:4px 4px 0 0;
+    font-size:11.5px;color:var(--text-dim);cursor:pointer;max-width:200px;flex-shrink:0;
+  }
+  .tab-item.active{background:var(--bg);color:var(--cyan);border-color:var(--cyan);border-bottom:2px solid var(--bg);}
+  .tab-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .tab-item .close-tab{font-size:12px;color:var(--text-faint);border-radius:50%;padding:0 3px;flex-shrink:0;}
+  .tab-item .close-tab:hover{color:var(--red);background:rgba(255,82,82,0.2);}
+
+  /* Topbar */
+  #topbar{
+    display:flex;align-items:center;gap:20px;padding:0 22px;height:50px;
+    border-bottom:1px solid var(--line);flex-shrink:0;background:var(--bg-raised);
+  }
+  #topbar h2{font-family:var(--head);font-size:20px;font-weight:600;letter-spacing:.5px;margin:0;}
+  .stat-chip{display:flex;flex-direction:column;gap:1px;}
+  .stat-chip .v{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text);}
+  .stat-chip .l{font-size:9px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.6px;}
+  .stat-chip .v.on{color:var(--green);}
+  .topbar-spacer{flex:1;}
+  .icon-btn{
+    background:var(--bg);border:1px solid var(--line);color:var(--text-dim);border-radius:var(--radius);
+    padding:6px 12px;font-size:11px;display:flex;align-items:center;gap:6px;
+  }
+  .icon-btn:hover:not(:disabled){border-color:var(--cyan);color:var(--text);}
+
+  #view-container{flex:1;overflow:auto;position:relative;}
+  .view{display:none;height:100%;padding:20px;}
   .view.active{display:block;}
 
-  .panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
-  .panel-head h3{font-family:var(--head);font-size:15px;font-weight:600;letter-spacing:.3px;margin:0;color:var(--text);}
-  .search-box{
-    background:var(--bg-raised);border:1px solid var(--line);border-radius:var(--radius);
-    padding:7px 10px;font-size:11.5px;color:var(--text);width:220px;outline:none;
+  /* QUICK CONNECT HERO */
+  .quick-connect-hero{margin-bottom:24px;}
+  .hero-card{
+    background:var(--bg-raised);border:1px solid var(--line);border-radius:6px;padding:20px;
+    position:relative;max-width:560px;
   }
-  .search-box:focus{border-color:var(--amber);}
+  .hero-card h4{font-family:var(--head);font-size:16px;margin:0 0 14px;color:var(--cyan);letter-spacing:.5px;}
 
-  /* ---- Device table ---- */
+  .qc-input-group{display:flex;gap:10px;margin-top:12px;}
+  .qc-input-group input{
+    flex:1;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
+    padding:10px;color:var(--text);font-size:14px;outline:none;
+  }
+  .qc-input-group input:focus{border-color:var(--cyan);}
+  .btn-connect{
+    background:var(--cyan);color:#05131A;font-weight:700;padding:10px 20px;border:none;
+    border-radius:var(--radius);font-size:12px;letter-spacing:.5px;text-transform:uppercase;
+    display:flex;align-items:center;gap:8px;
+  }
+  .btn-connect:hover:not(:disabled){filter:brightness(1.15);}
+
+  .mode-selector{display:flex;gap:14px;margin-top:12px;}
+  .mode-selector label{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-dim);cursor:pointer;}
+
+  /* Capability badges */
+  .cap-badges{display:flex;gap:5px;flex-wrap:wrap;}
+  .cap-badge{
+    font-size:9.5px;padding:2px 6px;border-radius:8px;background:var(--bg-raised-2);
+    color:var(--text-faint);border:1px solid var(--line);letter-spacing:.3px;
+  }
+  .cap-badge.on{color:var(--cyan);border-color:var(--cyan-dim);background:rgba(0,229,255,0.07);}
+
+  /* LIVE REMOTE DESKTOP SCREEN */
+  #view-desktop{padding:0;display:none;flex-direction:column;height:100%;background:#000;}
+  #view-desktop.active{display:flex;}
+
+  .desktop-toolbar{
+    height:42px;background:#0C1118;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;padding:0 16px;gap:14px;z-index:10;flex-wrap:wrap;
+  }
+  .dt-group{display:flex;align-items:center;gap:8px;border-right:1px solid var(--line);padding-right:14px;}
+  .dt-btn{
+    background:var(--bg-raised);border:1px solid var(--line);color:var(--text-dim);
+    padding:5px 10px;border-radius:var(--radius);font-size:11px;display:flex;align-items:center;gap:5px;
+  }
+  .dt-btn:hover:not(:disabled){border-color:var(--cyan);color:var(--text);}
+  .hud-badge{font-family:var(--mono);font-size:10.5px;color:var(--green);background:rgba(0,230,118,0.1);padding:3px 8px;border-radius:10px;}
+
+  .canvas-container{
+    flex:1;display:flex;align-items:center;justify-content:center;position:relative;overflow:auto;background:#05070A;
+  }
+  #remote-canvas{
+    background:#111;box-shadow:0 0 30px rgba(0,0,0,0.8);max-width:100%;max-height:100%;cursor:crosshair;
+    outline:none;
+  }
+  .canvas-empty-state{
+    position:absolute;color:var(--text-faint);font-size:12px;text-align:center;pointer-events:none;
+    font-family:var(--mono);
+  }
+
+  /* DUAL PANE FILE MANAGER */
+  .dual-pane-grid{display:grid;grid-template-columns:1fr 50px 1fr;gap:12px;height:calc(100vh - 160px);}
+  .pane-card{
+    background:var(--bg-raised);border:1px solid var(--line);border-radius:var(--radius);
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .pane-head{
+    padding:10px 14px;background:var(--bg-raised-2);border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:center;font-weight:600;
+  }
+  .pane-path{
+    padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:6px;
+  }
+  .pane-path .up-dir{cursor:pointer;color:var(--cyan);}
+  .pane-body{flex:1;overflow-y:auto;padding:8px;}
+  .file-item{
+    display:flex;align-items:center;padding:7px 10px;border-radius:var(--radius);
+    font-size:12px;cursor:pointer;gap:10px;
+  }
+  .file-item:hover{background:var(--bg-raised-2);}
+  .file-item.selected{background:var(--cyan-dim);}
+  .file-item .fname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .file-item .fmeta{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);flex-shrink:0;}
+  .pane-actions{display:flex;flex-direction:column;justify-content:center;gap:10px;}
+  .btn-transfer{
+    background:var(--bg-raised);border:1px solid var(--line);color:var(--cyan);
+    padding:12px 6px;border-radius:var(--radius);font-weight:bold;text-align:center;
+  }
+  .btn-transfer:hover:not(:disabled){background:var(--cyan);color:#000;}
+  .empty-note{color:var(--text-faint);padding:20px;text-align:center;font-size:11.5px;}
+  #local-file-input{display:none;}
+  .progress-bar{height:4px;background:var(--bg);border-radius:2px;overflow:hidden;margin-top:6px;display:none;}
+  .progress-bar .fill{height:100%;background:var(--cyan);width:0%;transition:width .15s;}
+
+  /* DEVICE TABLE */
   .dtable{width:100%;border-collapse:collapse;}
   .dtable thead th{
     text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--text-faint);
-    padding:0 12px 8px;font-weight:500;border-bottom:1px solid var(--line);
+    padding:0 12px 10px;font-weight:600;border-bottom:1px solid var(--line);
   }
   .dtable tbody tr{border-bottom:1px solid var(--line-soft);cursor:pointer;transition:background .1s;}
   .dtable tbody tr:hover{background:var(--bg-raised);}
-  .dtable td{padding:11px 12px;vertical-align:middle;}
+  .dtable td{padding:12px;vertical-align:middle;}
   .dev-name{font-weight:600;color:var(--text);}
   .dev-id{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);}
   .status-pill{
     display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:10px;
-    font-size:10px;text-transform:uppercase;letter-spacing:.4px;font-weight:600;
+    font-size:10px;text-transform:uppercase;letter-spacing:.4px;font-weight:700;
   }
-  .status-pill.online{background:var(--cyan-dim);color:var(--cyan);}
+  .status-pill.online{background:var(--green-dim);color:var(--green);}
   .status-pill.offline{background:#232B33;color:var(--text-faint);}
   .status-pill.busy{background:var(--amber-dim);color:var(--amber);}
-  .status-pill.maintenance{background:#2B2440;color:#B79CFF;}
-  .heartbeat{display:flex;align-items:flex-end;gap:2px;height:18px;}
-  .heartbeat i{width:3px;background:var(--line);border-radius:1px;display:block;}
-  .heartbeat.live i{background:var(--cyan);opacity:.85;}
-  .heartbeat.live i:nth-child(1){height:40%;}
-  .heartbeat.live i:nth-child(2){height:70%;}
-  .heartbeat.live i:nth-child(3){height:50%;}
-  .heartbeat.live i:nth-child(4){height:90%;animation:beat 1.6s infinite;}
-  .heartbeat.live i:nth-child(5){height:60%;}
-  .heartbeat.live i:nth-child(6){height:35%;}
-  @keyframes beat{0%,100%{opacity:.85;}50%{opacity:.3;}}
-  .btn-mini{
-    background:transparent;border:1px solid var(--line);color:var(--text-dim);border-radius:var(--radius);
-    padding:5px 10px;font-size:10.5px;
-  }
-  .btn-mini:hover{border-color:var(--amber);color:var(--amber);}
-  .btn-mini.danger:hover{border-color:var(--red);color:#ffb3bf;}
-  .empty-state{
-    padding:50px 20px;text-align:center;color:var(--text-faint);font-size:12px;
-    border:1px dashed var(--line);border-radius:4px;
-  }
+  .status-pill.maintenance{background:var(--red-dim);color:var(--red);}
 
-  /* ---- Detail drawer ---- */
-  #drawer-overlay{
-    display:none;position:fixed;inset:0;background:rgba(5,8,11,0.55);z-index:40;
-  }
+  /* DRAWER */
+  #drawer-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:40;}
   #drawer{
-    position:fixed;top:0;right:-420px;width:400px;height:100%;background:var(--bg-raised);
-    border-left:1px solid var(--line);z-index:41;transition:right .18s ease;overflow-y:auto;padding:22px;
+    position:fixed;top:0;right:-440px;width:420px;height:100%;background:var(--bg-raised);
+    border-left:1px solid var(--line);z-index:41;transition:right .2s ease;overflow-y:auto;padding:24px;
   }
   #drawer.open{right:0;}
   #drawer-overlay.open{display:block;}
-  .drawer-close{position:absolute;top:18px;right:18px;background:none;border:none;color:var(--text-faint);font-size:18px;}
-  .drawer-title{font-family:var(--head);font-size:20px;font-weight:600;margin:0 0 2px;}
-  .drawer-sub{font-family:var(--mono);font-size:11px;color:var(--text-faint);margin-bottom:22px;}
-  .metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:22px;}
-  .metric-card{background:var(--bg);border:1px solid var(--line-soft);border-radius:var(--radius);padding:12px;}
-  .metric-card .l{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-faint);margin-bottom:6px;}
-  .metric-card .v{font-family:var(--mono);font-size:19px;font-weight:600;}
-  .metric-bar{height:3px;background:var(--line-soft);border-radius:2px;margin-top:8px;overflow:hidden;}
-  .metric-bar i{display:block;height:100%;background:var(--cyan);}
-  .drawer-section-title{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--text-faint);margin:20px 0 10px;}
-  .kv-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line-soft);font-size:11.5px;}
-  .kv-row span:first-child{color:var(--text-dim);}
-  .kv-row span:last-child{font-family:var(--mono);color:var(--text);}
-  .drawer-actions{display:flex;gap:8px;margin-top:22px;}
-  .btn-primary{
-    flex:1;background:var(--amber);border:none;color:#181205;font-weight:600;font-size:11.5px;
-    padding:10px;border-radius:var(--radius);letter-spacing:.3px;
-  }
-  .btn-primary:hover{filter:brightness(1.08);}
-  .btn-primary:disabled{opacity:.4;}
-  .btn-secondary{
-    flex:1;background:transparent;border:1px solid var(--line);color:var(--text-dim);font-size:11.5px;
-    padding:10px;border-radius:var(--radius);
-  }
-  .btn-secondary:hover{border-color:var(--red);color:#ffb3bf;}
 
-  /* ---- Sessions ---- */
-  .session-card{
-    display:flex;align-items:center;gap:16px;background:var(--bg-raised);border:1px solid var(--line);
-    border-radius:var(--radius);padding:14px 16px;margin-bottom:8px;
-  }
-  .session-card .sid{font-family:var(--mono);font-size:11px;color:var(--text-faint);}
-  .session-card .sinfo{flex:1;}
-  .session-card .sinfo .dev{font-weight:600;font-size:12.5px;}
-  .session-state{
-    font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600;padding:3px 8px;border-radius:9px;
-  }
-  .session-state.active{background:var(--cyan-dim);color:var(--cyan);}
-  .session-state.pending, .session-state.handshaking{background:var(--amber-dim);color:var(--amber);}
-  .session-state.closed, .session-state.closing{background:#232B33;color:var(--text-faint);}
-  .session-stats{display:flex;gap:16px;font-family:var(--mono);font-size:10.5px;color:var(--text-dim);}
-  .session-stats div span{display:block;color:var(--text-faint);font-size:9px;text-transform:uppercase;letter-spacing:.4px;font-family:var(--body);}
-
-  /* ---- Terminal ---- */
-  .term-toolbar{display:flex;gap:10px;align-items:center;margin-bottom:12px;}
-  .term-toolbar select{
-    background:var(--bg-raised);border:1px solid var(--line);color:var(--text);border-radius:var(--radius);
-    padding:7px 10px;font-size:11.5px;min-width:220px;
-  }
-  #terminal-window{
-    background:#080B0F;border:1px solid var(--line);border-radius:4px;height:calc(100vh - 240px);min-height:320px;
-    display:flex;flex-direction:column;overflow:hidden;
-  }
-  #terminal-output{
-    flex:1;overflow-y:auto;padding:14px 16px;font-family:var(--mono);font-size:12px;line-height:1.6;color:#C9E6E1;
-    white-space:pre-wrap;word-break:break-all;
-  }
-  #terminal-output .line-cmd{color:var(--amber);}
-  #terminal-output .line-sys{color:var(--text-faint);font-style:italic;}
-  #terminal-output .line-err{color:#ff9aa8;}
-  .term-input-row{
-    display:flex;align-items:center;border-top:1px solid var(--line);padding:10px 14px;gap:8px;background:#0B1016;
-  }
-  .term-input-row .prompt{font-family:var(--mono);color:var(--cyan);font-size:12px;}
-  #terminal-input{
-    flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:12px;
-  }
-  #terminal-input:disabled{color:var(--text-faint);}
-
-  /* ---- Files ---- */
-  .files-toolbar{display:flex;gap:10px;margin-bottom:14px;align-items:center;}
-  .files-toolbar select{
-    background:var(--bg-raised);border:1px solid var(--line);color:var(--text);border-radius:var(--radius);
-    padding:7px 10px;font-size:11.5px;min-width:220px;
-  }
-  .path-bar{
-    font-family:var(--mono);font-size:11.5px;color:var(--text-dim);padding:8px 12px;background:var(--bg-raised);
-    border:1px solid var(--line);border-radius:var(--radius);margin-bottom:10px;
-  }
-  .file-row{
-    display:flex;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid var(--line-soft);font-size:12px;
-  }
-  .file-row:hover{background:var(--bg-raised);}
-  .file-row .fname{flex:1;}
-  .file-row .fsize{font-family:var(--mono);color:var(--text-faint);font-size:10.5px;width:80px;text-align:right;}
-  .upload-drop{
-    border:1px dashed var(--line);border-radius:4px;padding:26px;text-align:center;color:var(--text-faint);
-    font-size:11.5px;margin-top:14px;
-  }
-
-  /* ---- Audit ---- */
-  .audit-row{
-    display:flex;gap:14px;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:11.5px;align-items:baseline;
-  }
-  .audit-row .t{font-family:var(--mono);color:var(--text-faint);font-size:10px;width:76px;flex-shrink:0;}
-  .audit-row .evt{font-family:var(--mono);color:var(--amber);flex-shrink:0;}
-  .audit-row .detail{color:var(--text-dim);}
-
+  /* TOAST NOTIFICATIONS */
   .toast-wrap{position:fixed;bottom:20px;right:20px;z-index:60;display:flex;flex-direction:column;gap:8px;}
   .toast{
-    background:var(--bg-raised-2);border:1px solid var(--line);border-left:3px solid var(--cyan);
-    padding:10px 14px;border-radius:var(--radius);font-size:11.5px;min-width:220px;
-    animation:slidein .2s ease;
+    background:var(--bg-raised-2);border:1px solid var(--line);border-left:4px solid var(--cyan);
+    padding:12px 16px;border-radius:var(--radius);font-size:12px;min-width:240px;box-shadow:0 10px 25px rgba(0,0,0,0.5);
+    transition:opacity .3s;
   }
   .toast.err{border-left-color:var(--red);}
-  @keyframes slidein{from{transform:translateX(20px);opacity:0;}to{transform:translateX(0);opacity:1;}}
+  .toast.ok{border-left-color:var(--green);}
 </style>
 </head>
 <body>
 
-<!-- ============================================================ LOGIN ============================================================ -->
+<!-- LOGIN SCREEN -->
 <div id="login-screen">
   <div class="login-card">
     <div class="login-brand"><span class="mark"></span><h1>NEXUS</h1></div>
-    <div class="login-sub">OPERATOR CONSOLE — AUTHORIZED ACCESS ONLY</div>
+    <div class="login-sub">ENTERPRISE REMOTE ACCESS &amp; CONTROLLER</div>
 
     <div class="field">
-      <label>Dashboard API URL</label>
+      <label>Dashboard REST API Endpoint</label>
       <input id="api-base" type="text" value="http://localhost:8080" />
     </div>
     <div class="field">
-      <label>Username</label>
-      <input id="login-user" type="text" autocomplete="username" placeholder="admin" />
+      <label>Relay WebSocket Endpoint</label>
+      <input id="relay-ws-url" type="text" value="ws://localhost:7000" />
+    </div>
+    <div class="field">
+      <label>Operator Username</label>
+      <input id="login-user" type="text" placeholder="admin" autocomplete="username" />
     </div>
     <div class="field">
       <label>Password</label>
-      <input id="login-pass" type="password" autocomplete="current-password" placeholder="••••••••" />
+      <input id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" />
     </div>
     <div class="field">
-      <label>MFA code (if enabled)</label>
+      <label>TOTP Authenticator Code (if enabled)</label>
       <input id="login-totp" type="text" placeholder="000000" maxlength="6" />
     </div>
-    <button id="login-btn" onclick="doLogin()">Sign in</button>
+    <button id="login-btn" onclick="doLogin()">Authenticate Session</button>
     <div class="login-error" id="login-error"></div>
-    <div class="login-hint">
-      Connects to your NEXUS dashboard API (ui/dashboard.py). Every action taken here is executed
-      under your account's role and is written to the server audit log.
-    </div>
   </div>
 </div>
 
-<!-- ============================================================ APP ============================================================ -->
+<!-- APP SHELL -->
 <div id="app">
   <div id="sidebar">
     <div class="brand"><span class="mark"></span><span>NEXUS</span></div>
     <nav>
-      <div class="nav-item active" data-view="overview" onclick="switchView('overview')"><span class="dot"></span>Overview</div>
-      <div class="nav-item" data-view="devices" onclick="switchView('devices')"><span class="dot"></span>Devices<span class="nav-count" id="nav-devices-count">0</span></div>
-      <div class="nav-item" data-view="sessions" onclick="switchView('sessions')"><span class="dot"></span>Sessions<span class="nav-count" id="nav-sessions-count">0</span></div>
-      <div class="nav-item" data-view="terminal" onclick="switchView('terminal')"><span class="dot"></span>Terminal</div>
-      <div class="nav-item" data-view="files" onclick="switchView('files')"><span class="dot"></span>Files</div>
-      <div class="nav-item" data-view="audit" onclick="switchView('audit')"><span class="dot"></span>Audit log</div>
+      <div class="nav-item active" data-view="overview" onclick="switchView('overview')"><span class="icon">🖥️</span>Overview</div>
+      <div class="nav-item" data-view="devices" onclick="switchView('devices')"><span class="icon">💻</span>Devices<span class="nav-count" id="nav-devices-count">0</span></div>
+      <div class="nav-item" data-view="desktop" onclick="switchView('desktop')"><span class="icon">📺</span>Remote Desktop</div>
+      <div class="nav-item" data-view="files" onclick="switchView('files')"><span class="icon">📁</span>Dual File Manager</div>
+      <div class="nav-item" data-view="sessions" onclick="switchView('sessions')"><span class="icon">🔗</span>Active Sessions<span class="nav-count" id="nav-sessions-count">0</span></div>
+      <div class="nav-item" data-view="terminal" onclick="switchView('terminal')"><span class="icon">⚡</span>Shell Terminal</div>
     </nav>
     <div class="sidebar-foot">
-      <div class="conn-line"><span class="conn-pulse"></span><span id="conn-label">connected · admin</span></div>
-      <button id="logout-btn" onclick="doLogout()">Sign out</button>
+      <div class="conn-line"><span class="conn-pulse" id="conn-pulse"></span><span id="conn-label">connected</span></div>
+      <button id="logout-btn" onclick="doLogout()">Disconnect</button>
     </div>
   </div>
 
   <div id="main">
+    <!-- Session Tabs Bar -->
+    <div id="session-tabs-bar">
+      <div class="tab-item active" id="tab-overview" onclick="switchView('overview')">
+        <span>Dashboard</span>
+      </div>
+    </div>
+
     <div id="topbar">
-      <h2 id="topbar-title">Overview</h2>
+      <h2 id="topbar-title">Control Center</h2>
       <div class="stat-chip"><span class="v on" id="stat-online">0</span><span class="l">Online</span></div>
       <div class="stat-chip"><span class="v" id="stat-total">0</span><span class="l">Devices</span></div>
-      <div class="stat-chip"><span class="v" id="stat-sessions">0</span><span class="l">Active sessions</span></div>
+      <div class="stat-chip"><span class="v" id="stat-sessions">0</span><span class="l">Sessions</span></div>
       <div class="topbar-spacer"></div>
-      <span id="api-base-display"></span>
-      <button class="icon-btn" onclick="refreshAll()">⟳ Refresh</button>
+      <button class="icon-btn" id="refresh-btn" onclick="refreshAll()">⟳ Refresh</button>
     </div>
 
     <div id="view-container">
 
-      <!-- ---------- OVERVIEW ---------- -->
+      <!-- OVERVIEW -->
       <div class="view active" id="view-overview">
-        <div class="panel-head"><h3>System health</h3></div>
-        <div class="metric-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:26px;">
-          <div class="metric-card"><div class="l">Devices online</div><div class="v" id="ov-online">–</div></div>
-          <div class="metric-card"><div class="l">Devices total</div><div class="v" id="ov-total">–</div></div>
-          <div class="metric-card"><div class="l">Active sessions</div><div class="v" id="ov-sessions">–</div></div>
-          <div class="metric-card"><div class="l">API version</div><div class="v" id="ov-version">–</div></div>
+        <div class="quick-connect-hero">
+          <div class="hero-card">
+            <h4>Control Remote Computer</h4>
+            <p style="color:var(--text-dim);font-size:11.5px;margin-bottom:10px;">Enter a registered Device ID to launch a remote session. Only online, non-busy devices can be connected to.</p>
+            <div class="qc-input-group">
+              <input id="qc-device-id" placeholder="Partner Device ID (e.g., DEV-1049)" onkeydown="if(event.key==='Enter') quickConnect()" />
+              <button class="btn-connect" id="qc-connect-btn" onclick="quickConnect()">Connect</button>
+            </div>
+            <div class="mode-selector">
+              <label><input type="radio" name="qc-mode" value="desktop" checked /> Remote Control</label>
+              <label><input type="radio" name="qc-mode" value="files" /> File Transfer</label>
+              <label><input type="radio" name="qc-mode" value="terminal" /> Command Shell</label>
+            </div>
+          </div>
         </div>
-        <div class="panel-head"><h3>Recently seen devices</h3></div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h3 style="font-family:var(--head);font-size:18px;margin:0;">Registered Endpoint Fleet</h3>
+        </div>
         <table class="dtable" id="overview-table">
-          <thead><tr><th>Device</th><th>Type</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+          <thead><tr><th>Device</th><th>Type</th><th>OS</th><th>IP Address</th><th>Capabilities</th><th>Status</th><th>Action</th></tr></thead>
           <tbody></tbody>
         </table>
-        <div class="empty-state" id="overview-empty" style="display:none;">No devices registered yet.</div>
       </div>
 
-      <!-- ---------- DEVICES ---------- -->
-      <div class="view" id="view-devices">
-        <div class="panel-head">
-          <h3>All devices</h3>
-          <input class="search-box" placeholder="Search name, host, IP, tag…" oninput="filterDevices(this.value)" />
+      <!-- LIVE REMOTE DESKTOP SCREEN -->
+      <div class="view" id="view-desktop">
+        <div class="desktop-toolbar">
+          <div class="dt-group">
+            <span style="font-weight:bold;color:var(--cyan);font-size:12px;" id="dt-target-name">No Active Screen</span>
+            <span class="hud-badge" id="dt-fps-hud">-- FPS</span>
+            <span class="hud-badge" style="color:var(--cyan);background:rgba(0,229,255,0.1);" id="dt-latency-hud">-- ms</span>
+          </div>
+          <div class="dt-group">
+            <button class="dt-btn" onclick="requestClipboard()">📋 Get Clipboard</button>
+            <button class="dt-btn" onclick="setClipboardFromPrompt()">📋 Set Clipboard</button>
+          </div>
+          <div class="dt-group">
+            <button class="dt-btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+            <button class="dt-btn" style="color:var(--red);" onclick="disconnectDesktop()">✕ End Stream</button>
+          </div>
         </div>
-        <table class="dtable" id="devices-table">
-          <thead><tr><th>Device</th><th>Type</th><th>OS</th><th>IP</th><th>Status</th><th>Signal</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <div class="empty-state" id="devices-empty" style="display:none;">
-          No devices match. Once an agent registers with the relay it will appear here automatically.
-        </div>
-      </div>
-
-      <!-- ---------- SESSIONS ---------- -->
-      <div class="view" id="view-sessions">
-        <div class="panel-head"><h3>Active sessions</h3></div>
-        <div id="sessions-list"></div>
-        <div class="empty-state" id="sessions-empty" style="display:none;">
-          No active sessions. Open one from the Devices tab.
+        <div class="canvas-container" id="canvas-container">
+          <canvas id="remote-canvas" width="1280" height="720" tabindex="0"></canvas>
+          <div class="canvas-empty-state" id="canvas-empty-state">Waiting for first frame from agent…</div>
         </div>
       </div>
 
-      <!-- ---------- TERMINAL ---------- -->
-      <div class="view" id="view-terminal">
-        <div class="panel-head"><h3>Remote terminal</h3></div>
-        <div class="term-toolbar">
-          <select id="term-session-select" onchange="onTerminalSessionChange()">
-            <option value="">Select an active session…</option>
+      <!-- DUAL PANE FILE MANAGER -->
+      <div class="view" id="view-files">
+        <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;">
+          <span style="font-size:12px;color:var(--text-dim);">Active Target:</span>
+          <select id="files-session-select" style="background:var(--bg-raised);border:1px solid var(--line);color:var(--text);padding:6px;border-radius:3px;" onchange="onFileSessionChange()">
+            <option value="">Select Target Session...</option>
           </select>
-          <button class="icon-btn" onclick="connectTerminal()">Connect</button>
-          <button class="icon-btn" onclick="disconnectTerminal()">Disconnect</button>
+          <button class="icon-btn" onclick="loadRemoteFiles()">↻ Refresh Directories</button>
         </div>
-        <div id="terminal-window">
-          <div id="terminal-output"><div class="line-sys">// select a session and click Connect to attach to its shell.</div></div>
-          <div class="term-input-row">
-            <span class="prompt">❯</span>
-            <input id="terminal-input" placeholder="not connected" disabled
-                   onkeydown="if(event.key==='Enter') sendTerminalCommand()" />
+
+        <div class="dual-pane-grid">
+          <div class="pane-card">
+            <div class="pane-head">
+              <span>Local Machine Staging</span>
+              <button class="icon-btn" onclick="document.getElementById('local-file-input').click()">+ Add Files</button>
+            </div>
+            <div class="pane-path" id="local-path">Files staged from your browser</div>
+            <div class="pane-body" id="local-file-list">
+              <div class="empty-note">No files staged. Click "Add Files" to select files to upload.</div>
+            </div>
+            <input type="file" id="local-file-input" multiple onchange="onLocalFilesPicked(event)" />
+          </div>
+
+          <div class="pane-actions">
+            <button class="btn-transfer" onclick="transferFile('upload')" title="Upload staged files to remote">➔</button>
+            <button class="btn-transfer" onclick="transferFile('download')" title="Download selected remote file">⬅</button>
+          </div>
+
+          <div class="pane-card">
+            <div class="pane-head"><span>Remote Endpoint Target</span></div>
+            <div class="pane-path" id="remote-path">—</div>
+            <div class="pane-body" id="remote-file-list">
+              <div class="empty-note">Select a session above and refresh to browse.</div>
+            </div>
+            <div class="progress-bar" id="transfer-progress"><div class="fill" id="transfer-progress-fill"></div></div>
           </div>
         </div>
       </div>
 
-      <!-- ---------- FILES ---------- -->
-      <div class="view" id="view-files">
-        <div class="panel-head"><h3>File transfer</h3></div>
-        <div class="files-toolbar">
-          <select id="files-session-select">
-            <option value="">Select an active session…</option>
-          </select>
-          <button class="icon-btn" onclick="requestFileList()">List remote directory</button>
-        </div>
-        <div class="path-bar" id="files-path">/ (no session selected)</div>
-        <div id="files-list"></div>
-        <div class="upload-drop">Drag files here, or click to upload to the selected session's current directory</div>
+      <!-- DEVICES VIEW -->
+      <div class="view" id="view-devices">
+        <table class="dtable" id="devices-table">
+          <thead><tr><th>Device ID</th><th>Name</th><th>Type</th><th>OS</th><th>IP</th><th>Capabilities</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
 
-      <!-- ---------- AUDIT ---------- -->
-      <div class="view" id="view-audit">
-        <div class="panel-head"><h3>Local activity feed</h3></div>
-        <div id="audit-list"></div>
-        <div class="empty-state" style="margin-top:12px;">
-          This feed tracks actions taken from this console. Full server-side audit history lives in
-          <span style="font-family:var(--mono);">logs/audit.log</span> on the relay host.
+      <!-- SESSIONS VIEW -->
+      <div class="view" id="view-sessions">
+        <div id="sessions-list"></div>
+      </div>
+
+      <!-- TERMINAL VIEW -->
+      <div class="view" id="view-terminal">
+        <div style="background:#05070A;border:1px solid var(--line);border-radius:4px;height:calc(100vh - 170px);display:flex;flex-direction:column;">
+          <div id="term-output" style="flex:1;padding:16px;font-family:var(--mono);overflow-y:auto;color:#A5D6A7;white-space:pre-wrap;">// Connect to a device, then attach a shell here...</div>
+          <div style="display:flex;padding:10px;border-top:1px solid var(--line);background:var(--bg-raised);gap:8px;">
+            <span style="color:var(--cyan);font-family:var(--mono);">❯</span>
+            <input id="term-input" style="flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);" placeholder="Type command... (Enter to send)" onkeydown="if(event.key==='Enter') sendTermCmd()" disabled />
+          </div>
         </div>
       </div>
 
@@ -461,566 +488,1131 @@
   </div>
 </div>
 
-<!-- ---------- DEVICE DRAWER ---------- -->
+<!-- DRAWER OVERLAY -->
 <div id="drawer-overlay" onclick="closeDrawer()"></div>
 <div id="drawer">
-  <button class="drawer-close" onclick="closeDrawer()">✕</button>
-  <div class="drawer-title" id="drawer-name">—</div>
-  <div class="drawer-sub" id="drawer-id">—</div>
-
-  <div class="metric-grid">
-    <div class="metric-card">
-      <div class="l">CPU</div><div class="v" id="m-cpu">–%</div>
-      <div class="metric-bar"><i id="m-cpu-bar" style="width:0%"></i></div>
-    </div>
-    <div class="metric-card">
-      <div class="l">Memory</div><div class="v" id="m-ram">–%</div>
-      <div class="metric-bar"><i id="m-ram-bar" style="width:0%"></i></div>
-    </div>
-    <div class="metric-card">
-      <div class="l">Disk</div><div class="v" id="m-disk">–%</div>
-      <div class="metric-bar"><i id="m-disk-bar" style="width:0%"></i></div>
-    </div>
-    <div class="metric-card">
-      <div class="l">Uptime</div><div class="v" id="m-uptime" style="font-size:14px;">–</div>
-    </div>
-  </div>
-
-  <div class="drawer-section-title">Device information</div>
-  <div class="kv-row"><span>Type</span><span id="d-type">–</span></div>
-  <div class="kv-row"><span>OS</span><span id="d-os">–</span></div>
-  <div class="kv-row"><span>Hostname</span><span id="d-host">–</span></div>
-  <div class="kv-row"><span>IP address</span><span id="d-ip">–</span></div>
-  <div class="kv-row"><span>Status</span><span id="d-status">–</span></div>
-  <div class="kv-row"><span>Registered</span><span id="d-registered">–</span></div>
-  <div class="kv-row"><span>Last seen</span><span id="d-lastseen">–</span></div>
-
-  <div class="drawer-section-title">Capabilities</div>
-  <div class="kv-row" id="d-caps"><span>—</span><span>—</span></div>
-
-  <div class="drawer-actions">
-    <button class="btn-primary" id="drawer-open-session" onclick="openSessionForDrawer()">Open session</button>
-    <button class="btn-secondary" onclick="closeDrawer()">Close</button>
-  </div>
+  <h3 id="drawer-title" style="font-family:var(--head);font-size:22px;margin:0 0 4px;">Device Details</h3>
+  <div id="drawer-id" style="font-family:var(--mono);color:var(--text-faint);font-size:11px;margin-bottom:20px;">—</div>
+  <div id="drawer-content"></div>
 </div>
 
+<!-- TOAST CONTAINER -->
 <div class="toast-wrap" id="toast-wrap"></div>
 
 <script>
-/* ===========================================================================
-   NEXUS OPERATOR CONSOLE
-   Talks to the existing FastAPI backend (ui/dashboard.py):
-     POST   /auth/login /auth/refresh /auth/logout
-     GET    /devices  /devices/{id}  /devices/search/{q}
-     POST   /sessions            DELETE /sessions/{id}   GET /sessions
-     GET    /health
-     WS     /ws/controller   (terminal + file-transfer + screen streaming)
+/* =========================================================================
+   NEXUS Dashboard — client controller.
 
-   NOTE: terminal/file-transfer message shapes below follow the MessageType
-   enum in core/session.py as the best available reference. Confirm the exact
-   field names against your core/relay.py wire protocol before relying on
-   this in production — that file wasn't available when this console was built.
-=========================================================================== */
+   WIRE PROTOCOL NOTE — matches core/relay.py exactly (verified against the
+   actual uploaded relay.py + session.py, not assumed)
+   -------------------------------------------------------------------------
+   There is NO dashboard.py WebSocket proxy. The browser connects its
+   WebSocket DIRECTLY to the relay's own listener (RELAY_WS_URL below,
+   separate from API_BASE — the relay and the dashboard's REST API are
+   different servers/ports). core/relay.py's RelayServer accepts both
+   agent and controller connections on that one listener and multiplexes
+   everything by identity_type + session_id.
 
-let API_BASE = "";
-let accessToken = null;
-let refreshToken = null;
-let currentUser = { username: "", role: "" };
+   Handshake (once per app session, not once per remote-desktop session):
+     1. Browser → relay : { type: 'auth.controller', token }
+     2. Relay  → browser: { type: 'auth.ok', user_id }
+   This ONE WebSocket connection stays open for the whole app session and
+   is reused for every session.request the operator makes — relay.py keys
+   controllers by user_id (_controller_conns), not by session_id, so one
+   connection legitimately multiplexes many concurrent device sessions.
 
-let devicesCache = [];
+   Starting a session (relay.py owns the entire lifecycle — there is no
+   REST POST /sessions call; _handle_session_request in relay.py creates
+   the Session, wires attach_controller/attach_agent, and messages the
+   agent, all inline):
+     3. Browser → relay : { type: 'session.request', device_id }
+     4. Relay  → browser: { type: 'session.pending', session_id }
+     5. Relay  → browser: { type: 'session.active', session_id, ecdh_key }
+        (or 'session.rejected' / an 'error' frame if the agent declines)
+
+   Once ACTIVE, session-scoped messages are flat JSON — NOT wrapped in any
+   outer envelope, matching relay.py's _CONTROLLER_SESSION_MSG_TYPES set
+   exactly: screen_request, mouse_event, key_event, terminal_open,
+   terminal_data, terminal_close, file_list, file_download_start,
+   file_upload_start/chunk/end, clipboard_get, clipboard_set. Each carries
+   { type, session_id, payload }. Ending one session sends
+   { type: 'session.close', session_id } over this SAME connection — it
+   does not close the WebSocket itself.
+   ========================================================================= */
+
+let API_BASE      = localStorage.getItem('nexus_api_base') || "http://localhost:8080";
+let RELAY_WS_URL  = localStorage.getItem('nexus_relay_ws_url') || "ws://localhost:7000";
+let accessToken   = sessionStorage.getItem('nexus_access_token') || null;
+let refreshToken  = sessionStorage.getItem('nexus_refresh_token') || null;
+let currentUser   = sessionStorage.getItem('nexus_user') || null;
+
+// ONE persistent connection to the relay, shared by every session this
+// operator opens (relay.py's _controller_conns is keyed by user_id, not
+// session_id — this mirrors that intentionally).
+let relayWS = null;
+let relayConnectPromise = null;
+let wsReconnectAttempts = 0;
+let wsIntentionalClose  = false;
+
+// At most one session.request is ever in flight at a time — relay.py's
+// session.pending/session.active replies carry only session_id, not the
+// device_id that was requested, so correlation has to be done by "the one
+// request currently pending" rather than a keyed map.
+let pendingSessionRequest = null;  // { deviceId, sessionId, resolve, reject }
+
+let activeSessionId  = null;
+let activeDeviceId   = null;
+let activeTerminalId = null;
+
+let devicesCache  = [];
 let sessionsCache = [];
-let selectedDevice = null;
-let controllerWS = null;
-let activeTerminalSessionId = null;
+let stagedLocalFiles = [];   // File objects staged for upload
+let remoteCurrentPath = null;
 
-// ---------------------------------------------------------------- utilities
+// FPS / latency tracking for the remote desktop view
+let frameTimestamps = [];
+let lastFrameObjectUrl = null;
 
-function toast(msg, isErr=false){
+/* ---------------------------------------------------------------------
+   Utilities
+   --------------------------------------------------------------------- */
+
+function escapeHtml(str){
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function toast(msg, isErr=false, isOk=false){
   const wrap = document.getElementById('toast-wrap');
   const el = document.createElement('div');
-  el.className = 'toast' + (isErr ? ' err' : '');
+  el.className = 'toast' + (isErr ? ' err' : (isOk ? ' ok' : ''));
   el.textContent = msg;
   wrap.appendChild(el);
-  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(),300); }, 3800);
+  setTimeout(()=>{ el.style.opacity='0'; setTimeout(()=>el.remove(),300); }, 3500);
 }
 
-function logAudit(evt, detail){
-  const list = document.getElementById('audit-list');
-  const row = document.createElement('div');
-  row.className = 'audit-row';
-  const t = new Date().toLocaleTimeString();
-  row.innerHTML = `<span class="t">${t}</span><span class="evt">${evt}</span><span class="detail">${detail||''}</span>`;
-  list.prepend(row);
+function setBtnLoading(btn, loading, label){
+  if (!btn) return;
+  if (loading){
+    btn.dataset.origHtml = btn.innerHTML;
+    btn.innerHTML = `<span class="spinner"></span> ${label || 'Working...'}`;
+    btn.disabled = true;
+  } else {
+    if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
+    btn.disabled = false;
+  }
 }
 
-async function api(path, opts={}){
+function formatBytes(n){
+  if (n === undefined || n === null) return '—';
+  const units = ['B','KB','MB','GB'];
+  let i = 0, v = n;
+  while (v >= 1024 && i < units.length-1){ v /= 1024; i++; }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+/* ---------------------------------------------------------------------
+   REST client with 401 -> refresh -> retry-once
+   --------------------------------------------------------------------- */
+
+async function api(path, opts={}, _retried=false){
   const headers = opts.headers || {};
   if (accessToken) headers['Authorization'] = 'Bearer ' + accessToken;
   if (opts.body && !(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json';
-  const res = await fetch(API_BASE + path, {...opts, headers});
-  if (res.status === 401 && path !== '/auth/login'){
-    // try one refresh
-    const refreshed = await tryRefresh();
-    if (refreshed){
-      headers['Authorization'] = 'Bearer ' + accessToken;
-      const retry = await fetch(API_BASE + path, {...opts, headers});
-      if (!retry.ok) throw await errFrom(retry);
-      return retry.json();
-    }
-    doLogout();
-    throw new Error('Session expired — please sign in again.');
+
+  let res;
+  try {
+    res = await fetch(API_BASE + path, {...opts, headers});
+  } catch (netErr) {
+    throw new Error('Network error contacting relay API: ' + netErr.message);
   }
-  if (!res.ok) throw await errFrom(res);
-  if (res.status === 204) return null;
-  return res.json();
+
+  if (res.status === 401 && refreshToken && !_retried){
+    const refreshed = await tryRefreshToken();
+    if (refreshed) return api(path, opts, true);
+    doLogout();
+    throw new Error('Session expired. Please log in again.');
+  }
+
+  if (!res.ok) {
+    const errData = await res.json().catch(()=>({detail: res.statusText}));
+    throw new Error(errData.detail || 'API request failed');
+  }
+  return res.status === 204 ? null : res.json();
 }
 
-async function errFrom(res){
-  try { const j = await res.json(); return new Error(j.detail || res.statusText); }
-  catch { return new Error(res.statusText); }
-}
-
-async function tryRefresh(){
-  if (!refreshToken) return false;
-  try{
-    const r = await fetch(API_BASE + '/auth/refresh', {
-      method:'POST', headers:{'Authorization':'Bearer '+refreshToken}
+async function tryRefreshToken(){
+  try {
+    const res = await fetch(API_BASE + '/auth/refresh', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + refreshToken },
     });
-    if (!r.ok) return false;
-    const j = await r.json();
-    accessToken = j.access_token;
+    if (!res.ok) return false;
+    const data = await res.json();
+    accessToken = data.access_token;
+    sessionStorage.setItem('nexus_access_token', accessToken);
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
-// ---------------------------------------------------------------- auth
+/* ---------------------------------------------------------------------
+   Auth
+   --------------------------------------------------------------------- */
+
+function initSession(){
+  document.getElementById('api-base').value = API_BASE;
+  document.getElementById('relay-ws-url').value = RELAY_WS_URL;
+  if (accessToken){
+    enterApp();
+    refreshAll();
+  }
+}
 
 async function doLogin(){
   const btn = document.getElementById('login-btn');
-  const err = document.getElementById('login-error');
-  err.style.display = 'none';
   API_BASE = document.getElementById('api-base').value.replace(/\/+$/,'');
-  const username = document.getElementById('login-user').value.trim();
-  const password = document.getElementById('login-pass').value;
+  RELAY_WS_URL = document.getElementById('relay-ws-url').value.replace(/\/+$/,'');
+  localStorage.setItem('nexus_api_base', API_BASE);
+  localStorage.setItem('nexus_relay_ws_url', RELAY_WS_URL);
+
+  const user = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
   const totp = document.getElementById('login-totp').value.trim();
 
-  if (!username || !password){
-    err.textContent = 'Username and password are required.';
-    err.style.display = 'block';
+  if (!user || !pass){
+    document.getElementById('login-error').textContent = 'Username and password are required.';
+    document.getElementById('login-error').style.display = 'block';
     return;
   }
 
-  btn.disabled = true; btn.textContent = 'Signing in…';
-  try{
-    const body = { username, password };
-    if (totp) body.totp_code = totp;
-    const res = await fetch(API_BASE + '/auth/login', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
-    });
-    if (!res.ok){
-      const j = await res.json().catch(()=>({detail:res.statusText}));
-      throw new Error(j.detail || 'Login failed');
-    }
-    const j = await res.json();
-    accessToken = j.access_token;
-    refreshToken = j.refresh_token;
-    currentUser = { username, role: j.role };
+  setBtnLoading(btn, true, 'Authenticating...');
+  document.getElementById('login-error').style.display = 'none';
 
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').classList.add('active');
-    document.getElementById('conn-label').textContent = `connected · ${username} (${j.role})`;
-    document.getElementById('api-base-display').textContent = API_BASE;
-    logAudit('auth.login', `signed in as ${username}`);
+  try {
+    const res = await fetch(API_BASE + '/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ username: user, password: pass, totp_code: totp || null })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(()=>({detail: 'Invalid credentials'}));
+      throw new Error(errData.detail || 'Authentication failed');
+    }
+    const data = await res.json();
+    accessToken  = data.access_token;
+    refreshToken = data.refresh_token;
+    currentUser  = user;
+    sessionStorage.setItem('nexus_access_token', accessToken);
+    sessionStorage.setItem('nexus_refresh_token', refreshToken);
+    sessionStorage.setItem('nexus_user', currentUser);
+
+    enterApp();
+    toast('Authenticated successfully', false, true);
     refreshAll();
-  } catch(e){
-    err.textContent = e.message;
-    err.style.display = 'block';
+  } catch(e) {
+    document.getElementById('login-error').textContent = e.message;
+    document.getElementById('login-error').style.display = 'block';
   } finally {
-    btn.disabled = false; btn.textContent = 'Sign in';
+    setBtnLoading(btn, false);
   }
 }
 
-async function doLogout(){
-  try{ if (accessToken) await api('/auth/logout', {method:'POST'}); } catch{}
-  accessToken = null; refreshToken = null;
-  if (controllerWS) { try{controllerWS.close();}catch{} controllerWS = null; }
+function enterApp(){
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').classList.add('active');
+  document.getElementById('conn-label').textContent = currentUser ? `authenticated · ${currentUser}` : 'authenticated';
+}
+
+function doLogout(){
+  wsIntentionalClose = true;
+  accessToken = null;
+  refreshToken = null;
+  currentUser = null;
+  sessionStorage.removeItem('nexus_access_token');
+  sessionStorage.removeItem('nexus_refresh_token');
+  sessionStorage.removeItem('nexus_user');
+  if (relayWS) { relayWS.close(); relayWS = null; }
+  pendingSessionRequest = null;
+  activeSessionId = null;
+  activeDeviceId = null;
+  activeTerminalId = null;
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('login-pass').value = '';
 }
 
-// ---------------------------------------------------------------- nav
+/* Enter key on any login field submits */
+document.addEventListener('DOMContentLoaded', () => {
+  ['login-user','login-pass','login-totp'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  });
+  initSession();
+});
+
+/* ---------------------------------------------------------------------
+   View switching
+   --------------------------------------------------------------------- */
 
 function switchView(name){
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view===name));
-  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
-  document.getElementById('view-'+name).classList.add('active');
-  const titles = {overview:'Overview', devices:'Devices', sessions:'Sessions', terminal:'Remote terminal', files:'File transfer', audit:'Audit log'};
-  document.getElementById('topbar-title').textContent = titles[name];
-  if (name==='sessions' || name==='terminal' || name==='files') populateSessionSelects();
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === name));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  document.getElementById('topbar-title').textContent = name.toUpperCase();
+
+  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  if (name === 'overview' || !activeSessionId) {
+    document.getElementById('tab-overview')?.classList.add('active');
+  } else {
+    document.getElementById(`tab-sess-${activeSessionId}`)?.classList.add('active');
+  }
+
+  if (name === 'sessions') renderSessionsList();
+  if (name === 'terminal' && activeSessionId && !activeTerminalId) openTerminal();
 }
 
-// ---------------------------------------------------------------- data refresh
+/* ---------------------------------------------------------------------
+   Polling: devices / sessions / health
+   --------------------------------------------------------------------- */
+
+let refreshInFlight = false;
 
 async function refreshAll(){
-  await Promise.all([refreshHealth(), refreshDevices(), refreshSessions()]);
-}
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  const btn = document.getElementById('refresh-btn');
+  try {
+    const health = await api('/health');
+    document.getElementById('stat-online').textContent = health.devices_online;
+    document.getElementById('stat-total').textContent = health.devices_total;
+    document.getElementById('stat-sessions').textContent = health.active_sessions;
 
-async function refreshHealth(){
-  try{
-    const h = await api('/health');
-    document.getElementById('stat-online').textContent = h.devices_online;
-    document.getElementById('stat-total').textContent = h.devices_total;
-    document.getElementById('stat-sessions').textContent = h.active_sessions;
-    document.getElementById('ov-online').textContent = h.devices_online;
-    document.getElementById('ov-total').textContent = h.devices_total;
-    document.getElementById('ov-sessions').textContent = h.active_sessions;
-    document.getElementById('ov-version').textContent = h.version;
-  } catch(e){ /* silent — health polling shouldn't spam toasts */ }
-}
+    const devs = await api('/devices');
+    devicesCache = devs.devices;
+    document.getElementById('nav-devices-count').textContent = devs.total;
+    renderOverviewTable(devs.devices);
+    renderDevicesTable(devs.devices);
 
-async function refreshDevices(){
-  try{
-    const r = await api('/devices');
-    devicesCache = r.devices;
-    document.getElementById('nav-devices-count').textContent = r.total;
-    renderDevicesTable(devicesCache);
-    renderOverviewTable(devicesCache);
-  } catch(e){ toast('Failed to load devices: '+e.message, true); }
-}
-
-async function refreshSessions(){
-  try{
-    const r = await api('/sessions');
-    sessionsCache = r.sessions;
-    document.getElementById('nav-sessions-count').textContent = sessionsCache.length;
-    renderSessions(sessionsCache);
+    const sess = await api('/sessions');
+    sessionsCache = sess.sessions;
+    document.getElementById('nav-sessions-count').textContent = sess.sessions.length;
     populateSessionSelects();
-  } catch(e){ toast('Failed to load sessions: '+e.message, true); }
+    if (document.getElementById('view-sessions').classList.contains('active')) renderSessionsList();
+  } catch(e) {
+    toast('Error syncing telemetry: ' + e.message, true);
+  } finally {
+    refreshInFlight = false;
+  }
 }
 
-// ---------------------------------------------------------------- render: devices
-
-function statusPill(status){
-  return `<span class="status-pill ${status}">${status}</span>`;
-}
-function heartbeat(status){
-  const live = status === 'online' || status === 'busy';
-  return `<div class="heartbeat ${live?'live':''}"><i></i><i></i><i></i><i></i><i></i><i></i></div>`;
-}
-
-function renderDevicesTable(devices, filterText=''){
-  const tbody = document.querySelector('#devices-table tbody');
-  const q = filterText.toLowerCase();
-  const filtered = devices.filter(d =>
-    !q || d.name.toLowerCase().includes(q) || (d.hostname||'').toLowerCase().includes(q) ||
-    (d.ip_address||'').toLowerCase().includes(q) || (d.tags||[]).some(t=>t.toLowerCase().includes(q))
-  );
-  tbody.innerHTML = filtered.map(d => `
-    <tr onclick="openDrawer('${d.device_id}')">
-      <td><div class="dev-name">${escapeHtml(d.name)}</div><div class="dev-id">${d.device_id}</div></td>
-      <td>${d.device_type}</td>
-      <td>${escapeHtml(d.os || '—')} ${d.os_version || ''}</td>
-      <td class="dev-id">${d.ip_address || '—'}</td>
-      <td>${statusPill(d.status)}</td>
-      <td>${heartbeat(d.status)}</td>
-      <td><button class="btn-mini" onclick="event.stopPropagation(); openSessionFor('${d.device_id}')">Open session</button></td>
-    </tr>
-  `).join('');
-  document.getElementById('devices-empty').style.display = filtered.length ? 'none' : 'block';
+function capBadges(caps){
+  if (!caps) return '';
+  const map = [
+    ['screen_share', '🖥 Screen'],
+    ['remote_input', '⌨ Input'],
+    ['terminal', '⚡ Shell'],
+    ['file_transfer', '📁 Files'],
+    ['clipboard', '📋 Clip'],
+  ];
+  return `<div class="cap-badges">${map.map(([k,label]) =>
+    `<span class="cap-badge ${caps[k] ? 'on' : ''}">${label}</span>`
+  ).join('')}</div>`;
 }
 
-function filterDevices(text){ renderDevicesTable(devicesCache, text); }
+function canControl(dev){
+  return dev.status === 'online' && dev.capabilities && dev.capabilities.screen_share;
+}
 
-function renderOverviewTable(devices){
+function renderOverviewTable(devs){
   const tbody = document.querySelector('#overview-table tbody');
-  const sorted = [...devices].sort((a,b)=> (b.last_seen||0)-(a.last_seen||0)).slice(0,8);
-  tbody.innerHTML = sorted.map(d => `
-    <tr onclick="openDrawer('${d.device_id}')">
-      <td><div class="dev-name">${escapeHtml(d.name)}</div><div class="dev-id">${d.device_id}</div></td>
-      <td>${d.device_type}</td>
-      <td>${statusPill(d.status)}</td>
-      <td class="dev-id">${d.last_seen ? new Date(d.last_seen*1000).toLocaleString() : '—'}</td>
-      <td><button class="btn-mini" onclick="event.stopPropagation(); openSessionFor('${d.device_id}')">Open session</button></td>
+  tbody.innerHTML = devs.slice(0, 8).map(d => `
+    <tr onclick="openDrawer('${escapeHtml(d.device_id)}')">
+      <td><div class="dev-name">${escapeHtml(d.name)}</div><div class="dev-id">${escapeHtml(d.device_id)}</div></td>
+      <td>${escapeHtml(d.device_type)}</td>
+      <td>${escapeHtml(d.os || '—')}</td>
+      <td class="dev-id">${escapeHtml(d.ip_address || '—')}</td>
+      <td>${capBadges(d.capabilities)}</td>
+      <td><span class="status-pill ${escapeHtml(d.status)}">${escapeHtml(d.status)}</span></td>
+      <td><button class="icon-btn" ${d.status === 'online' ? '' : 'disabled'} onclick="event.stopPropagation(); startControl('${escapeHtml(d.device_id)}', 'desktop')">⚡ Remote Control</button></td>
     </tr>
-  `).join('');
-  document.getElementById('overview-empty').style.display = sorted.length ? 'none' : 'block';
+  `).join('') || `<tr><td colspan="7" class="empty-note">No devices registered yet.</td></tr>`;
 }
 
-function escapeHtml(s){
-  return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function renderDevicesTable(devs){
+  const tbody = document.querySelector('#devices-table tbody');
+  tbody.innerHTML = devs.map(d => `
+    <tr onclick="openDrawer('${escapeHtml(d.device_id)}')">
+      <td class="dev-id">${escapeHtml(d.device_id)}</td>
+      <td class="dev-name">${escapeHtml(d.name)}</td>
+      <td>${escapeHtml(d.device_type)}</td>
+      <td>${escapeHtml(d.os || '—')}</td>
+      <td>${escapeHtml(d.ip_address || '—')}</td>
+      <td>${capBadges(d.capabilities)}</td>
+      <td><span class="status-pill ${escapeHtml(d.status)}">${escapeHtml(d.status)}</span></td>
+      <td><button class="icon-btn" ${d.status === 'online' ? '' : 'disabled'} onclick="event.stopPropagation(); startControl('${escapeHtml(d.device_id)}', 'desktop')">Control</button></td>
+    </tr>
+  `).join('') || `<tr><td colspan="8" class="empty-note">No devices registered yet.</td></tr>`;
 }
 
-// ---------------------------------------------------------------- device drawer
+/* ---------------------------------------------------------------------
+   Session creation / control
+   --------------------------------------------------------------------- */
 
-async function openDrawer(deviceId){
-  try{
-    const r = await api('/devices/' + deviceId);
-    const d = r.device, m = r.metrics;
-    selectedDevice = d;
-    document.getElementById('drawer-name').textContent = d.name;
-    document.getElementById('drawer-id').textContent = d.device_id;
-    document.getElementById('d-type').textContent = d.device_type;
-    document.getElementById('d-os').textContent = (d.os||'—') + ' ' + (d.os_version||'');
-    document.getElementById('d-host').textContent = d.hostname || '—';
-    document.getElementById('d-ip').textContent = d.ip_address || '—';
-    document.getElementById('d-status').textContent = d.status;
-    document.getElementById('d-registered').textContent = d.registered_at ? new Date(d.registered_at*1000).toLocaleString() : '—';
-    document.getElementById('d-lastseen').textContent = d.last_seen ? new Date(d.last_seen*1000).toLocaleString() : '—';
+function quickConnect(){
+  const target = document.getElementById('qc-device-id').value.trim();
+  if (!target) { toast('Please specify a partner Device ID', true); return; }
+  const mode = document.querySelector('input[name="qc-mode"]:checked').value;
+  startControl(target, mode);
+}
 
-    const caps = Object.entries(d.capabilities||{}).filter(([,v])=>v).map(([k])=>k);
-    const capsEl = document.getElementById('d-caps');
-    if (capsEl) {
-      if (caps.length) {
-        capsEl.innerHTML = caps.map(c => `<div class="kv-row" style="border-bottom:1px solid var(--line-soft);"><span>${c.replace(/_/g,' ')}</span><span>enabled</span></div>`).join('');
-      } else {
-        capsEl.innerHTML = '<div class="kv-row"><span>—</span><span>none reported</span></div>';
-      }
-    }
+async function startControl(deviceId, mode='desktop'){
+  const dev = devicesCache.find(d => d.device_id === deviceId);
+  if (dev && dev.status === 'offline'){
+    toast(`${deviceId} is offline and cannot be connected to.`, true);
+    return;
+  }
+  if (dev && dev.status === 'busy'){
+    toast(`${deviceId} is already in an active session.`, true);
+    return;
+  }
+  if (pendingSessionRequest){
+    toast('A connection request is already in progress — please wait for it to finish.', true);
+    return;
+  }
 
-    if (m){
-      document.getElementById('m-cpu').textContent = m.cpu_percent.toFixed(0)+'%';
-      document.getElementById('m-cpu-bar').style.width = m.cpu_percent+'%';
-      document.getElementById('m-ram').textContent = m.ram_percent.toFixed(0)+'%';
-      document.getElementById('m-ram-bar').style.width = m.ram_percent+'%';
-      document.getElementById('m-disk').textContent = m.disk_percent.toFixed(0)+'%';
-      document.getElementById('m-disk-bar').style.width = m.disk_percent+'%';
-      document.getElementById('m-uptime').textContent = formatUptime(m.uptime_seconds);
+  const btn = document.getElementById('qc-connect-btn');
+  setBtnLoading(btn, true, 'Connecting...');
+
+  try {
+    await ensureRelayConnection();
+    const { sessionId } = await requestSession(deviceId);
+
+    activeSessionId  = sessionId;
+    activeDeviceId   = deviceId;
+    activeTerminalId = null;
+    toast(`Session active: ${sessionId.slice(0,8)}…`, false, true);
+    addSessionTab(deviceId, sessionId);
+
+    if (mode === 'desktop') {
+      switchView('desktop');
+      document.getElementById('dt-target-name').textContent = deviceId;
+      resetCanvasStream();
+      requestScreenFrame();
+    } else if (mode === 'files') {
+      switchView('files');
+      document.getElementById('files-session-select').value = sessionId;
+      onFileSessionChange();
     } else {
-      ['m-cpu','m-ram','m-disk'].forEach(id=>document.getElementById(id).textContent='–%');
-      document.getElementById('m-uptime').textContent = 'no data';
+      switchView('terminal');
     }
-
-    document.getElementById('drawer-open-session').disabled = d.status === 'offline';
-    document.getElementById('drawer').classList.add('open');
-    document.getElementById('drawer-overlay').classList.add('open');
-  } catch(e){ toast('Failed to load device: '+e.message, true); }
+  } catch(e) {
+    toast('Connection rejected: ' + e.message, true);
+  } finally {
+    setBtnLoading(btn, false);
+  }
 }
+
+/* ---------------------------------------------------------------------
+   Relay WebSocket: ONE persistent connection, auth once, request many
+   sessions over it. Matches core/relay.py's RelayServer exactly:
+   _controller_conns is keyed by user_id (latest wins), not by session —
+   sessions are created via a WS message on this connection, not REST.
+   --------------------------------------------------------------------- */
+
+function setConnPulse(state){
+  // state: 'ok' | 'warn' | 'bad'
+  const el = document.getElementById('conn-pulse');
+  el.className = 'conn-pulse' + (state === 'ok' ? '' : ' ' + state);
+}
+
+function ensureRelayConnection(){
+  if (relayWS && relayWS.readyState === WebSocket.OPEN) return Promise.resolve(true);
+  if (relayConnectPromise) return relayConnectPromise;
+
+  relayConnectPromise = new Promise((resolve, reject) => {
+    wsIntentionalClose = false;
+    const ws = new WebSocket(RELAY_WS_URL);
+    relayWS = ws;
+    setConnPulse('warn');
+    let resolved = false;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'auth.controller', token: accessToken }));
+    };
+
+    ws.onmessage = (evt) => {
+      let data;
+      try { data = JSON.parse(evt.data); }
+      catch { console.error('WS payload was not JSON:', evt.data); return; }
+
+      if (data.type === 'auth.ok'){
+        wsReconnectAttempts = 0;
+        setConnPulse('ok');
+        if (!resolved){ resolved = true; resolve(true); }
+        return;
+      }
+      if (data.type === 'error' && !resolved){
+        // Only treat as a connection-level failure if we haven't
+        // authenticated yet; once open, errors are handled per-request
+        // by handleSessionMessage/requestSession instead.
+        resolved = true;
+        reject(new Error(data.message || 'Relay auth failed'));
+        return;
+      }
+      routeRelayMessage(data);
+    };
+
+    ws.onerror = () => setConnPulse('bad');
+
+    ws.onclose = () => {
+      setConnPulse('bad');
+      relayWS = null;
+      relayConnectPromise = null;
+      if (!resolved){ resolved = true; reject(new Error('Relay connection closed before authenticating')); }
+      if (wsIntentionalClose) return;
+
+      // Bounded auto-reconnect — only meaningful if the operator still has
+      // an active session open somewhere in the UI.
+      if (activeSessionId && wsReconnectAttempts < 5){
+        wsReconnectAttempts++;
+        const delay = Math.min(1000 * wsReconnectAttempts, 8000);
+        toast(`Relay connection lost. Reconnecting in ${Math.round(delay/1000)}s…`, true);
+        setTimeout(() => { ensureRelayConnection().catch(()=>{}); }, delay);
+      } else if (activeSessionId) {
+        toast('Could not reconnect to the relay. Please reconnect manually.', true);
+      }
+    };
+  }).finally(() => { relayConnectPromise = null; });
+
+  return relayConnectPromise;
+}
+
+function requestSession(deviceId){
+  return new Promise((resolve, reject) => {
+    if (!relayWS || relayWS.readyState !== WebSocket.OPEN){
+      reject(new Error('Not connected to the relay'));
+      return;
+    }
+    pendingSessionRequest = { deviceId, sessionId: null, resolve, reject };
+    relayWS.send(JSON.stringify({ type: 'session.request', device_id: deviceId }));
+  });
+}
+
+function routeRelayMessage(data){
+  switch (data.type){
+    case 'session.pending':
+      // Correlate to the one in-flight request — relay.py's session.pending
+      // reply carries only session_id, no device_id, so this is the first
+      // point at which we learn the session_id for what we just requested.
+      if (pendingSessionRequest) pendingSessionRequest.sessionId = data.session_id;
+      return;
+
+    case 'session.active':
+      if (pendingSessionRequest && pendingSessionRequest.sessionId === data.session_id){
+        const { resolve, deviceId, sessionId } = pendingSessionRequest;
+        pendingSessionRequest = null;
+        resolve({ sessionId, deviceId });
+      } else {
+        toast('Session encrypted channel established', false, true);
+      }
+      return;
+
+    case 'session.rejected':
+      if (pendingSessionRequest){
+        const { reject } = pendingSessionRequest;
+        pendingSessionRequest = null;
+        reject(new Error(data.reason || 'Agent rejected the session'));
+      } else {
+        toast('Agent rejected the session: ' + (data.reason || 'unknown'), true);
+      }
+      return;
+
+    case 'session.close':
+      onRemoteSessionClosed(data.session_id, data.reason);
+      return;
+
+    case 'error':
+      if (pendingSessionRequest){
+        const { reject } = pendingSessionRequest;
+        pendingSessionRequest = null;
+        reject(new Error(data.message || 'Relay error'));
+      } else {
+        toast('Relay error: ' + (data.message || 'unknown'), true);
+      }
+      return;
+
+    default:
+      handleSessionMessage(data);
+  }
+}
+
+function sendSessionMsg(type, payload){
+  if (!relayWS || relayWS.readyState !== WebSocket.OPEN){
+    toast('Not connected to a live session', true);
+    return false;
+  }
+  if (!activeSessionId){
+    toast('No active session — connect to a device first', true);
+    return false;
+  }
+  relayWS.send(JSON.stringify({ type, session_id: activeSessionId, payload: payload || {} }));
+  return true;
+}
+
+function handleSessionMessage(data){
+  switch (data.type){
+    case 'session.active':
+      toast('Session encrypted channel established', false, true);
+      break;
+    case 'session.rejected':
+      toast('Agent rejected the session: ' + (data.reason || 'unknown'), true);
+      break;
+    case 'session.close':
+      onRemoteSessionClosed(data.session_id, data.reason);
+      break;
+    case 'screen_frame':
+      renderScreenFrameHex(data.payload);
+      break;
+    case 'terminal_data': {
+      const out = document.getElementById('term-output');
+      out.textContent += (data.payload && data.payload.data !== undefined ? data.payload.data : '');
+      out.scrollTop = out.scrollHeight;
+      break;
+    }
+    case 'terminal_close':
+      appendTermLine('\n[shell session ended]');
+      activeTerminalId = null;
+      document.getElementById('term-input').disabled = true;
+      break;
+    case 'file_list':
+      renderRemoteFiles(data.payload);
+      break;
+    case 'clipboard_get':
+      if (data.payload && typeof data.payload.text === 'string'){
+        navigator.clipboard?.writeText(data.payload.text).catch(()=>{});
+        toast('Remote clipboard copied to your local clipboard');
+      }
+      break;
+    case 'pong':
+      break;
+    default:
+      console.debug('Unhandled session message:', data.type);
+  }
+}
+
+function onRemoteSessionClosed(sessionId, reason){
+  // The relay now sends this for EVERY close path — an explicit end by
+  // either side, an idle timeout, an agent disconnecting, or another tab
+  // closing the session — so the UI must not assume it was the one that
+  // initiated the close. Note this does NOT touch relayWS: the connection
+  // is shared across every session this operator has open, so one session
+  // ending must not disconnect the others.
+  const tab = document.getElementById(`tab-sess-${sessionId}`);
+  if (tab) tab.remove();
+
+  if (sessionId !== activeSessionId) { refreshAll(); return; }
+
+  toast(`Session ended (${reason || 'closed'})`, reason === 'timeout');
+  activeSessionId = null;
+  activeDeviceId = null;
+  activeTerminalId = null;
+
+  document.getElementById('term-input').disabled = true;
+  resetCanvasStream();
+  refreshAll();
+  if (document.getElementById('view-desktop').classList.contains('active') ||
+      document.getElementById('view-terminal').classList.contains('active')) {
+    switchView('overview');
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Session tabs
+   --------------------------------------------------------------------- */
+
+function addSessionTab(deviceId, sessionId){
+  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  const bar = document.getElementById('session-tabs-bar');
+  const existing = document.getElementById(`tab-sess-${sessionId}`);
+  if (existing) { existing.classList.add('active'); return; }
+  const tab = document.createElement('div');
+  tab.className = 'tab-item active';
+  tab.id = `tab-sess-${sessionId}`;
+  tab.innerHTML = `<span>${escapeHtml(deviceId)}</span><span class="close-tab" onclick="closeSessionTab('${escapeHtml(sessionId)}', event)">✕</span>`;
+  tab.addEventListener('click', (e) => {
+    if (e.target.classList.contains('close-tab')) return;
+    switchToSession(sessionId, deviceId);
+  });
+  bar.appendChild(tab);
+}
+
+function switchToSession(sessionId, deviceId){
+  // The session is already ACTIVE on the shared relayWS connection — this
+  // just changes which one the UI is currently pointed at. No new
+  // session.request goes out; sending one here would open a SECOND,
+  // redundant session against the same device instead of just switching
+  // the view to the one that already exists.
+  activeSessionId = sessionId;
+  activeDeviceId = deviceId;
+  activeTerminalId = null;
+  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  document.getElementById(`tab-sess-${sessionId}`)?.classList.add('active');
+
+  switchView('desktop');
+  document.getElementById('dt-target-name').textContent = deviceId;
+  resetCanvasStream();
+  requestScreenFrame();
+}
+
+function closeSessionTab(sessionId, ev){
+  if (ev) ev.stopPropagation();
+  if (relayWS && relayWS.readyState === WebSocket.OPEN){
+    relayWS.send(JSON.stringify({ type: 'session.close', session_id: sessionId }));
+  }
+  const tab = document.getElementById(`tab-sess-${sessionId}`);
+  if (tab) tab.remove();
+  if (sessionId === activeSessionId){
+    activeSessionId = null;
+    activeDeviceId = null;
+    activeTerminalId = null;
+  }
+  toast('Session terminated');
+  refreshAll();
+  switchView('overview');
+}
+
+function populateSessionSelects(){
+  const opts = '<option value="">Select Target Session...</option>' +
+    sessionsCache.map(s => `<option value="${escapeHtml(s.session_id)}">${escapeHtml(s.device_id)} (${escapeHtml(s.session_id.slice(0,8))})</option>`).join('');
+  const sel = document.getElementById('files-session-select');
+  const prev = sel.value;
+  sel.innerHTML = opts;
+  if (prev) sel.value = prev;
+}
+
+function renderSessionsList(){
+  const container = document.getElementById('sessions-list');
+  if (!sessionsCache.length) {
+    container.innerHTML = '<div class="empty-note">No active remote desktop sessions.</div>';
+    return;
+  }
+  container.innerHTML = sessionsCache.map(s => `
+    <div class="hero-card" style="margin-bottom:12px;max-width:none;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <h4 style="margin:0 0 4px;">Session ID: ${escapeHtml(s.session_id)}</h4>
+        <div style="font-size:11.5px;color:var(--text-dim);">Target Device: <strong>${escapeHtml(s.device_id)}</strong> | Mode: ${escapeHtml(s.controller_role || 'Operator')} | Duration: ${Math.round(s.duration_s || 0)}s</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="dt-btn" onclick="switchToSession('${escapeHtml(s.session_id)}', '${escapeHtml(s.device_id)}')">View Screen</button>
+        <button class="dt-btn" style="color:var(--red);" onclick="closeSessionTab('${escapeHtml(s.session_id)}', event)">Terminate</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+/* ---------------------------------------------------------------------
+   File manager
+   --------------------------------------------------------------------- */
+
+function onFileSessionChange(){
+  const sessionId = document.getElementById('files-session-select').value;
+  if (!sessionId) return;
+  const sess = sessionsCache.find(s => s.session_id === sessionId);
+  if (sess && sessionId !== activeSessionId){
+    switchToSession(sessionId, sess.device_id);
+    switchView('files');
+  }
+  remoteCurrentPath = null;
+  loadRemoteFiles();
+}
+
+function loadRemoteFiles(path){
+  const sessionId = document.getElementById('files-session-select').value;
+  if (!sessionId) { toast('Please select an active session first', true); return; }
+  if (sessionId !== activeSessionId){ toast('Select this session from the sidebar first to attach its live channel', true); return; }
+  const ok = sendSessionMsg('file_list', { path: path || remoteCurrentPath || undefined });
+  if (ok) toast('Refreshing remote directory...');
+}
+
+function renderRemoteFiles(payload){
+  if (!payload) return;
+  remoteCurrentPath = payload.path;
+  document.getElementById('remote-path').innerHTML =
+    (remoteCurrentPath ? `<span class="up-dir" onclick="navigateUp()">⬆ up</span> · ${escapeHtml(remoteCurrentPath)}` : '—');
+
+  const list = document.getElementById('remote-file-list');
+  const entries = payload.entries || [];
+  if (!entries.length){
+    list.innerHTML = '<div class="empty-note">Empty directory.</div>';
+    return;
+  }
+  list.innerHTML = entries.map(e => `
+    <div class="file-item" data-name="${escapeHtml(e.name)}" data-dir="${e.is_dir}" onclick="onRemoteFileClick('${escapeHtml(e.name)}', ${!!e.is_dir}, event)">
+      <span class="fname">${e.is_dir ? '📁' : '📄'} ${escapeHtml(e.name)}</span>
+      <span class="fmeta">${e.is_dir ? 'DIR' : formatBytes(e.size)}</span>
+    </div>
+  `).join('');
+}
+
+function navigateUp(){
+  if (!remoteCurrentPath) return;
+  const isWin = remoteCurrentPath.includes('\\');
+  const sep = isWin ? '\\' : '/';
+  const parts = remoteCurrentPath.split(sep).filter(Boolean);
+  parts.pop();
+  const parent = isWin ? (parts.join(sep) + sep) : ('/' + parts.join(sep));
+  loadRemoteFiles(parent || sep);
+}
+
+let selectedRemoteFile = null;
+
+function onRemoteFileClick(name, isDir, ev){
+  const sep = (remoteCurrentPath || '').includes('\\') ? '\\' : '/';
+  if (isDir){
+    const base = remoteCurrentPath ? remoteCurrentPath.replace(/[\\/]+$/,'') : '';
+    loadRemoteFiles(base + sep + name);
+    return;
+  }
+  document.querySelectorAll('#remote-file-list .file-item').forEach(el => el.classList.remove('selected'));
+  ev.currentTarget.classList.add('selected');
+  selectedRemoteFile = name;
+}
+
+function onLocalFilesPicked(evt){
+  const files = Array.from(evt.target.files || []);
+  stagedLocalFiles = stagedLocalFiles.concat(files);
+  renderLocalFiles();
+  evt.target.value = '';
+}
+
+function renderLocalFiles(){
+  const list = document.getElementById('local-file-list');
+  if (!stagedLocalFiles.length){
+    list.innerHTML = '<div class="empty-note">No files staged. Click "Add Files" to select files to upload.</div>';
+    return;
+  }
+  list.innerHTML = stagedLocalFiles.map((f, i) => `
+    <div class="file-item">
+      <span class="fname">📄 ${escapeHtml(f.name)}</span>
+      <span class="fmeta">${formatBytes(f.size)}</span>
+      <span class="close-tab" style="color:var(--text-faint);" onclick="removeStagedFile(${i})">✕</span>
+    </div>
+  `).join('');
+}
+
+function removeStagedFile(i){
+  stagedLocalFiles.splice(i, 1);
+  renderLocalFiles();
+}
+
+const UPLOAD_CHUNK_BYTES = 256 * 1024;
+
+async function transferFile(direction){
+  const sessionId = document.getElementById('files-session-select').value;
+  if (!sessionId) { toast('Select a target session first', true); return; }
+  if (sessionId !== activeSessionId){ toast('Select this session from the sidebar first to attach its live channel', true); return; }
+
+  if (direction === 'upload'){
+    if (!stagedLocalFiles.length){ toast('Stage at least one local file first', true); return; }
+    for (const file of stagedLocalFiles) await uploadOneFile(file);
+    stagedLocalFiles = [];
+    renderLocalFiles();
+    return;
+  }
+
+  // download
+  if (!selectedRemoteFile){ toast('Select a remote file to download first', true); return; }
+  const sep = (remoteCurrentPath || '').includes('\\') ? '\\' : '/';
+  const remotePath = (remoteCurrentPath || '').replace(/[\\/]+$/,'') + sep + selectedRemoteFile;
+  sendSessionMsg('file_download_start', { path: remotePath });
+  toast(`Requested download of ${selectedRemoteFile}`);
+}
+
+async function uploadOneFile(file){
+  const transferId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
+  const progressBar = document.getElementById('transfer-progress');
+  const progressFill = document.getElementById('transfer-progress-fill');
+  progressBar.style.display = 'block';
+  progressFill.style.width = '0%';
+
+  const destPath = (remoteCurrentPath || '').replace(/[\\/]+$/,'') +
+    ((remoteCurrentPath || '').includes('\\') ? '\\' : '/') + file.name;
+
+  sendSessionMsg('file_upload_start', {
+    transfer_id: transferId, path: destPath, size: file.size, name: file.name,
+  });
+
+  const totalChunks = Math.ceil(file.size / UPLOAD_CHUNK_BYTES) || 1;
+  for (let i = 0; i < totalChunks; i++){
+    const slice = file.slice(i * UPLOAD_CHUNK_BYTES, (i + 1) * UPLOAD_CHUNK_BYTES);
+    const buf = await slice.arrayBuffer();
+    const b64 = arrayBufferToBase64(buf);
+    sendSessionMsg('file_upload_chunk', { transfer_id: transferId, index: i, data: b64 });
+    progressFill.style.width = `${Math.round(((i+1) / totalChunks) * 100)}%`;
+    // Yield to keep the UI responsive on large files.
+    await new Promise(r => setTimeout(r, 0));
+  }
+  sendSessionMsg('file_upload_end', { transfer_id: transferId });
+  toast(`Uploaded ${file.name} (${formatBytes(file.size)})`, false, true);
+  setTimeout(() => { progressBar.style.display = 'none'; }, 600);
+}
+
+function arrayBufferToBase64(buf){
+  let binary = '';
+  const bytes = new Uint8Array(buf);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+/* ---------------------------------------------------------------------
+   Drawer
+   --------------------------------------------------------------------- */
+
+function openDrawer(deviceId){
+  const dev = devicesCache.find(d => d.device_id === deviceId);
+  if (!dev) return;
+  document.getElementById('drawer-title').textContent = dev.name;
+  document.getElementById('drawer-id').textContent = dev.device_id;
+  const caps = dev.capabilities || {};
+  document.getElementById('drawer-content').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:12px;font-size:12px;">
+      <div><strong>OS Version:</strong> ${escapeHtml(dev.os || 'N/A')}</div>
+      <div><strong>IP Address:</strong> ${escapeHtml(dev.ip_address || 'N/A')}</div>
+      <div><strong>Device Type:</strong> ${escapeHtml(dev.device_type)}</div>
+      <div><strong>Current Status:</strong> <span class="status-pill ${escapeHtml(dev.status)}">${escapeHtml(dev.status)}</span></div>
+      <div><strong>Capabilities:</strong> ${capBadges(caps)}</div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:10px 0;">
+      <button class="btn-connect" style="width:100%;justify-content:center;" ${canControl(dev) ? '' : 'disabled'}
+        onclick="startControl('${escapeHtml(dev.device_id)}', 'desktop'); closeDrawer();">
+        ${canControl(dev) ? 'Launch Remote Desktop' : (dev.status !== 'online' ? 'Device Offline' : 'Screen Share Unsupported')}
+      </button>
+    </div>
+  `;
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('drawer-overlay').classList.add('open');
+}
+
 function closeDrawer(){
   document.getElementById('drawer').classList.remove('open');
   document.getElementById('drawer-overlay').classList.remove('open');
 }
-function formatUptime(s){
-  if (!s) return '—';
-  const d=Math.floor(s/86400), h=Math.floor((s%86400)/3600), m=Math.floor((s%3600)/60);
-  return `${d}d ${h}h ${m}m`;
+
+/* ---------------------------------------------------------------------
+   Remote desktop: real screen rendering + full input capture
+   --------------------------------------------------------------------- */
+
+function resetCanvasStream(){
+  frameTimestamps = [];
+  document.getElementById('canvas-empty-state').style.display = 'block';
+  document.getElementById('dt-fps-hud').textContent = '-- FPS';
+  document.getElementById('dt-latency-hud').textContent = '-- ms';
+  const canvas = document.getElementById('remote-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0F172A';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  bindCanvasInputHandlers();
 }
 
-// ---------------------------------------------------------------- sessions
-
-function renderSessions(sessions){
-  const list = document.getElementById('sessions-list');
-  document.getElementById('sessions-empty').style.display = sessions.length ? 'none' : 'block';
-  list.innerHTML = sessions.map(s => `
-    <div class="session-card">
-      <div class="sinfo">
-        <div class="dev">${resolveDeviceName(s.device_id)}</div>
-        <div class="sid">${s.session_id}</div>
-      </div>
-      <div class="session-stats">
-        <div><span>Sent</span>${formatBytes(s.bytes_sent)}</div>
-        <div><span>Recv</span>${formatBytes(s.bytes_received)}</div>
-        <div><span>Duration</span>${s.duration_s.toFixed(0)}s</div>
-      </div>
-      <span class="session-state ${s.state}">${s.state}</span>
-      <button class="btn-mini" onclick="jumpToTerminal('${s.session_id}')">Terminal</button>
-      <button class="btn-mini danger" onclick="closeSession('${s.session_id}')">Close</button>
-    </div>
-  `).join('');
-}
-function resolveDeviceName(deviceId){
-  const d = devicesCache.find(x=>x.device_id===deviceId);
-  return d ? escapeHtml(d.name) : deviceId;
-}
-function formatBytes(n){
-  if (n < 1024) return n+' B';
-  if (n < 1024*1024) return (n/1024).toFixed(1)+' KB';
-  return (n/1024/1024).toFixed(2)+' MB';
+function requestScreenFrame(){
+  // One-shot nudge sent right after connecting. DesktopAgent.on_session_start()
+  // (server-side) starts its own continuous push loop the moment the session
+  // goes ACTIVE, so this is just a fallback in case that hasn't landed yet —
+  // it is NOT re-called on a timer/recursively; doing so would double up
+  // with the agent's own push loop and waste bandwidth + capture work.
+  sendSessionMsg('screen_request', { quality: 60, scale: 1.0 });
 }
 
-async function openSessionFor(deviceId){
-  try{
-    const r = await api('/sessions', {method:'POST', body: JSON.stringify({device_id: deviceId})});
-    toast('Session opened: ' + r.session_id);
-    logAudit('session.open', `device ${deviceId} → session ${r.session_id}`);
-    await refreshSessions();
-    switchView('sessions');
-  } catch(e){ toast('Could not open session: '+e.message, true); }
-}
-function openSessionForDrawer(){
-  if (selectedDevice) openSessionFor(selectedDevice.device_id);
-}
-async function closeSession(sessionId){
-  try{
-    await api('/sessions/'+sessionId, {method:'DELETE'});
-    toast('Session closed');
-    logAudit('session.close', sessionId);
-    await refreshSessions();
-  } catch(e){ toast('Could not close session: '+e.message, true); }
-}
-function jumpToTerminal(sessionId){
-  switchView('terminal');
-  const sel = document.getElementById('term-session-select');
-  sel.value = sessionId;
-  connectTerminal();
+function renderScreenFrameHex(payload){
+  // BaseAgent._dispatch_session_msg and DesktopAgent's push loop both send
+  // {"frame": <hex jpeg>[, "timestamp": ...]} — NOT {"data": ...}. This key
+  // previously didn't match the real agent-side contract, which is why the
+  // canvas stayed on "Waiting for first frame..." even with a working agent.
+  if (!payload || !payload.frame) return;
+  try {
+    const bytes = hexToBytes(payload.frame);
+    const blob = new Blob([bytes], { type: 'image/jpeg' });
+    renderScreenBlob(blob, payload.timestamp);
+  } catch (e) {
+    console.error('Failed to decode screen frame:', e);
+  }
 }
 
-function populateSessionSelects(){
-  const opts = '<option value="">Select an active session…</option>' +
-    sessionsCache.map(s=>`<option value="${s.session_id}">${resolveDeviceName(s.device_id)} — ${s.session_id.slice(0,8)}</option>`).join('');
-  document.getElementById('term-session-select').innerHTML = opts;
-  document.getElementById('files-session-select').innerHTML = opts;
+function hexToBytes(hex){
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++){
+    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return bytes;
 }
 
-// ---------------------------------------------------------------- terminal (WS /ws/controller)
+function renderScreenBlob(blob, serverTimestamp){
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.getElementById('remote-canvas');
+    const ctx = canvas.getContext('2d');
+    if (canvas.width !== img.width || canvas.height !== img.height){
+      canvas.width = img.width;
+      canvas.height = img.height;
+    }
+    ctx.drawImage(img, 0, 0);
+    document.getElementById('canvas-empty-state').style.display = 'none';
 
-function termLine(text, cls=''){
-  const out = document.getElementById('terminal-output');
-  const div = document.createElement('div');
-  if (cls) div.className = cls;
-  div.textContent = text;
-  out.appendChild(div);
-  out.scrollTop = out.scrollHeight;
+    if (lastFrameObjectUrl) URL.revokeObjectURL(lastFrameObjectUrl);
+    lastFrameObjectUrl = url;
+
+    const now = performance.now();
+    frameTimestamps.push(now);
+    frameTimestamps = frameTimestamps.filter(t => now - t < 2000);
+    document.getElementById('dt-fps-hud').textContent = `${Math.round(frameTimestamps.length / 2)} FPS`;
+
+    if (serverTimestamp){
+      const latencyMs = Math.max(0, Math.round(Date.now() - serverTimestamp * 1000));
+      document.getElementById('dt-latency-hud').textContent = `${latencyMs} ms`;
+    }
+  };
+  img.onerror = () => URL.revokeObjectURL(url);
+  img.src = url;
 }
 
-function ensureControllerWS(){
-  return new Promise((resolve, reject) => {
-    if (controllerWS && controllerWS.readyState === WebSocket.OPEN) return resolve(controllerWS);
-    const wsUrl = API_BASE.replace(/^http/, 'ws') + '/ws/controller';
-    const ws = new WebSocket(wsUrl);
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ token: accessToken }));
+let canvasHandlersBound = false;
+
+function bindCanvasInputHandlers(){
+  if (canvasHandlersBound) return;
+  canvasHandlersBound = true;
+  const canvas = document.getElementById('remote-canvas');
+
+  const toRemoteCoords = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: Math.round((e.clientX - rect.left) * (canvas.width / rect.width)),
+      y: Math.round((e.clientY - rect.top) * (canvas.height / rect.height)),
     };
-    ws.onmessage = (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch { termLine(String(ev.data)); return; }
-      if (msg.type === 'auth.ok'){
-        controllerWS = ws;
-        resolve(ws);
-        return;
-      }
-      if (msg.type === 'error'){
-        termLine('[error] ' + (msg.message||msg.code), 'line-err');
-        return;
-      }
-      handleControllerMessage(msg);
+  };
+  const btnName = (e) => (e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left');
+
+  canvas.addEventListener('mousemove', (e) => {
+    const { x, y } = toRemoteCoords(e);
+    sendSessionMsg('mouse_event', { action: 'move', x, y });
+  });
+  canvas.addEventListener('mousedown', (e) => {
+    canvas.focus();
+    const { x, y } = toRemoteCoords(e);
+    sendSessionMsg('mouse_event', { action: 'press', x, y, button: btnName(e) });
+  });
+  canvas.addEventListener('mouseup', (e) => {
+    const { x, y } = toRemoteCoords(e);
+    sendSessionMsg('mouse_event', { action: 'release', x, y, button: btnName(e) });
+  });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    sendSessionMsg('mouse_event', { action: 'scroll', dx: Math.sign(e.deltaX), dy: -Math.sign(e.deltaY) });
+  }, { passive: false });
+
+  const keyName = (e) => {
+    const map = {
+      'Enter':'enter','Backspace':'backspace','Delete':'delete','Tab':'tab','Escape':'escape',
+      ' ':'space','ArrowUp':'up','ArrowDown':'down','ArrowLeft':'left','ArrowRight':'right',
+      'Home':'home','End':'end','PageUp':'page_up','PageDown':'page_down',
+      'Control':'ctrl','Alt':'alt','Shift':'shift','Meta':'cmd','CapsLock':'caps_lock','Insert':'insert',
     };
-    ws.onerror = () => reject(new Error('WebSocket connection failed'));
-    ws.onclose = () => {
-      controllerWS = null;
-      termLine('// disconnected from relay', 'line-sys');
-      document.getElementById('terminal-input').disabled = true;
-    };
+    if (map[e.key]) return map[e.key];
+    if (/^F\d{1,2}$/.test(e.key)) return e.key.toLowerCase();
+    if (e.key.length === 1) return e.key;
+    return null;
+  };
+
+  canvas.addEventListener('keydown', (e) => {
+    const key = keyName(e);
+    if (!key) return;
+    e.preventDefault();
+    sendSessionMsg('key_event', { action: 'press', key });
+  });
+  canvas.addEventListener('keyup', (e) => {
+    const key = keyName(e);
+    if (!key) return;
+    e.preventDefault();
+    sendSessionMsg('key_event', { action: 'release', key });
   });
 }
 
-function handleControllerMessage(msg){
-  // Expected shapes follow core/session.py MessageType — adjust to match your relay.py.
-  switch(msg.type){
-    case 'terminal_data':
-      termLine(msg.payload ?? '');
-      break;
-    case 'file_list':
-      renderFileList(msg.payload || []);
-      break;
-    case 'metrics_update':
-      // could refresh drawer live if open on this device
-      break;
-    default:
-      // Unknown/binary payloads (e.g. screen_frame) are out of scope for the text terminal view.
-      break;
-  }
+function requestClipboard(){
+  if (!sendSessionMsg('clipboard_get', {})) return;
+  toast('Requesting remote clipboard…');
 }
 
-async function connectTerminal(){
-  const sessionId = document.getElementById('term-session-select').value;
-  if (!sessionId){ toast('Select a session first', true); return; }
-  activeTerminalSessionId = sessionId;
-  document.getElementById('terminal-output').innerHTML = '';
-  termLine('// connecting to session ' + sessionId + ' …', 'line-sys');
-  try{
-    const ws = await ensureControllerWS();
-    ws.send(JSON.stringify({ type:'terminal_open', session_id: sessionId }));
-    termLine('// terminal attached', 'line-sys');
-    document.getElementById('terminal-input').disabled = false;
-    document.getElementById('terminal-input').placeholder = 'type a command and press Enter';
-    document.getElementById('terminal-input').focus();
-    logAudit('terminal.open', sessionId);
-  } catch(e){
-    termLine('// failed to connect: ' + e.message, 'line-err');
-    toast('Terminal connection failed: '+e.message, true);
-  }
+function setClipboardFromPrompt(){
+  const text = prompt('Text to push to the remote clipboard:');
+  if (text === null) return;
+  sendSessionMsg('clipboard_set', { text });
+  toast('Clipboard pushed to remote device');
 }
 
-function disconnectTerminal(){
-  if (controllerWS && activeTerminalSessionId){
-    try{ controllerWS.send(JSON.stringify({type:'terminal_close', session_id: activeTerminalSessionId})); }catch{}
-  }
-  if (controllerWS) { try{ controllerWS.close(); }catch{} }
-  controllerWS = null;
-  activeTerminalSessionId = null;
-  document.getElementById('terminal-input').disabled = true;
-  document.getElementById('terminal-input').placeholder = 'not connected';
-  termLine('// session detached', 'line-sys');
-  logAudit('terminal.close', '');
+function toggleFullscreen(){
+  const el = document.getElementById('canvas-container');
+  if (!document.fullscreenElement) el.requestFullscreen();
+  else document.exitFullscreen();
 }
 
-function sendTerminalCommand(){
-  const input = document.getElementById('terminal-input');
-  const cmd = input.value;
-  if (!cmd || !controllerWS || !activeTerminalSessionId) return;
-  termLine('❯ ' + cmd, 'line-cmd');
-  controllerWS.send(JSON.stringify({
-    type: 'terminal_data', session_id: activeTerminalSessionId, payload: cmd + '\n'
-  }));
-  logAudit('terminal.command', cmd.slice(0,80));
-  input.value = '';
+function disconnectDesktop(){
+  if (activeSessionId) closeSessionTab(activeSessionId);
 }
 
-function onTerminalSessionChange(){ /* wait for explicit Connect click */ }
+/* ---------------------------------------------------------------------
+   Terminal
+   --------------------------------------------------------------------- */
 
-// ---------------------------------------------------------------- files (best-effort, over same WS)
+function appendTermLine(text){
+  const out = document.getElementById('term-output');
+  out.textContent += text;
+  out.scrollTop = out.scrollHeight;
+}
 
-function renderFileList(entries){
-  const list = document.getElementById('files-list');
-  document.getElementById('files-path').textContent = '/ (' + entries.length + ' items)';
-  if (!entries.length){
-    list.innerHTML = '<div class="empty-state">Directory is empty or listing not supported by this agent build.</div>';
+function openTerminal(){
+  if (!activeSessionId){
+    appendTermLine('\n// Connect to a device first.');
     return;
   }
-  list.innerHTML = entries.map(f => `
-    <div class="file-row">
-      <span>${f.is_dir ? '📁' : '📄'}</span>
-      <span class="fname">${escapeHtml(f.name||'')}</span>
-      <span class="fsize">${f.size!=null ? formatBytes(f.size) : ''}</span>
-      <button class="btn-mini">Download</button>
-    </div>
-  `).join('');
+  activeTerminalId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+  const ok = sendSessionMsg('terminal_open', { terminal_id: activeTerminalId });
+  if (ok){
+    document.getElementById('term-input').disabled = false;
+    appendTermLine('\n// Shell attached. Waiting for prompt…');
+  }
 }
 
-async function requestFileList(){
-  const sessionId = document.getElementById('files-session-select').value;
-  if (!sessionId){ toast('Select a session first', true); return; }
-  try{
-    const ws = await ensureControllerWS();
-    ws.send(JSON.stringify({ type:'file_list', session_id: sessionId, payload: { path: '.' } }));
-    logAudit('file.list_request', sessionId);
-  } catch(e){ toast('Could not request file list: '+e.message, true); }
+function sendTermCmd(){
+  const inp = document.getElementById('term-input');
+  if (!inp.value) return;
+  const cmd = inp.value;
+  inp.value = '';
+
+  if (!activeSessionId || !relayWS || relayWS.readyState !== WebSocket.OPEN){
+    toast('No live session attached — connect to a device first', true);
+    return;
+  }
+  if (!activeTerminalId){
+    openTerminal();
+  }
+  sendSessionMsg('terminal_data', { terminal_id: activeTerminalId, data: cmd + '\n' });
+  appendTermLine(`\n❯ ${cmd}`);
 }
 
-// ---------------------------------------------------------------- polling
+/* ---------------------------------------------------------------------
+   Background polling
+   --------------------------------------------------------------------- */
 
-setInterval(()=>{ if (accessToken) refreshHealth(); }, 8000);
-setInterval(()=>{ if (accessToken) { refreshDevices(); refreshSessions(); } }, 20000);
-
-document.getElementById('login-pass').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
-document.getElementById('login-totp').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
-
-// If this page is being served by the dashboard API itself (http/https,
-// not file://), pre-fill the API URL field with the page's own origin.
-if (location.protocol === 'http:' || location.protocol === 'https:'){
-  document.getElementById('api-base').value = location.origin;
-}
+setInterval(() => { if (accessToken) refreshAll(); }, 12000);
 </script>
 </body>
 </html>

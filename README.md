@@ -1,265 +1,100 @@
-# NEXUS Remote Access System v2
+# NEXUS Remote Access
 
-A cross-platform, enterprise-grade remote access and control system built on WebSocket transport with end-to-end encryption, ghost-mode agent deployment, and OS service integration.
+Self-hosted remote desktop, terminal, and file-transfer platform. One relay server brokers encrypted sessions between operators (a browser dashboard) and agents (a small Python process running on the machine you want to control) — no port-forwarding required on the agent side, and no third-party cloud service sits in the middle of your traffic.
 
-## Features
+> **Status: v1.** This is the first working version. It's had real debugging mileage (see [Known Limitations](#known-limitations-v1) below) but hasn't been used at scale or audited by anyone outside the team that built it. Read that section before deciding what you trust it with.
 
-- **Ghost Mode** — agents run silently as system services, starting before user login with no GUI artifacts
-- **End-to-End Encryption** — ECDH (P-256) key exchange + AES-256-GCM per-session encryption
-- **Multi-Agent Types** — desktop (screen/input), server (headless terminal), IoT/mobile (constrained)
-- **Role-Based Access Control** — ADMIN, OPERATOR, VIEWER, AGENT roles with JWT authentication
-- **Cross-Platform Services** — Windows (NSSM) and Linux (systemd) service installers
-- **Browser Dashboard** — FastAPI-powered REST API + real-time WebSocket proxy console
-- **CLI Controller** — Interactive remote shell, file transfer, device management
-- **MFA Support** — Optional TOTP two-factor authentication
-- **Audit Logging** — Structured JSON logs with full security event trail
-- **Rate Limiting** — IP-based auth throttling and per-connection message limits
+---
 
-## Architecture
+## What it does
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  OPERATOR                                                    │
-│  Browser / CLI / Dashboard                                   │
-└───────────────────┬──────────────────────────────────────────┘
-                    │ HTTPS/WSS + JWT
-                    ▼
-┌──────────────────────────────────────────────────────────────┐
-│  DASHBOARD API  (FastAPI)                                    │
-│  /auth  /devices  /sessions  /ws/controller                  │
-└───────────────────┬──────────────────────────────────────────┘
-                    │ WSS relay proxy
-                    ▼
-┌──────────────────────────────────────────────────────────────┐
-│  RELAY SERVER  (core/relay.py)                               │
-│  WebSocket hub · Device registry · Session manager          │
-│  Rate limiting · Heartbeat monitor · Binary frame routing    │
-└────────────┬────────────────┬──────────────────┬─────────────┘
-             │                │                  │
-             ▼                ▼                  ▼
-        DesktopAgent     ServerAgent         IoTAgent
-        (ghost mode)     (headless)         (constrained)
-```
+- **Remote desktop** — live screen streaming (JPEG over WebSocket) with full mouse and keyboard input forwarding.
+- **Remote terminal** — a real shell (PowerShell on Windows, `$SHELL` elsewhere) attached per session, streamed both ways.
+- **File browser & transfer** — list remote directories; upload/download between operator and agent.
+- **Clipboard sync** — pull or push clipboard contents between operator and agent.
+- **Multi-device fleet** — a registry tracks every agent that's ever connected, online/offline/busy status, and per-device capabilities.
+- **Role-based access** — JWT-authenticated operators with `admin` / `operator` / `viewer` roles; agents authenticate separately with per-device tokens.
+- **End-to-end session encryption** — each session gets its own ECDH-derived AES-256-GCM key between the relay and the agent, independent of the outer TLS transport.
+- **NAT traversal by design** — the agent always makes an *outbound* connection to the relay, so a machine behind a home router or corporate NAT can still be reached without forwarding a single port on that end.
 
-**Encryption flow:** ECDH public key exchange → HKDF shared secret (scoped to session ID) → AES-256-GCM on all subsequent frames with prepended nonce.
-
-## Tech Stack
-
-| Layer | Libraries |
-|-------|-----------|
-| Web framework | FastAPI, Uvicorn |
-| WebSocket | websockets (asyncio) |
-| Encryption | cryptography (AES-256-GCM, ECDH P-256) |
-| Auth | PyJWT (HS256), bcrypt, TOTP |
-| Config | Pydantic Settings, YAML |
-| Database | SQLite + aiosqlite |
-| CLI | Click, Rich |
-| Screen capture | MSS |
-| Input injection | pynput |
-| System metrics | psutil |
-| Builds | PyInstaller |
-
-## Project Structure
+## Architecture at a glance
 
 ```
-nexus-ras-v2/
-├── agents/               # Remote access agents (desktop, server, IoT/mobile)
-├── config/               # Pydantic settings + defaults.yaml
-├── core/                 # Relay server, auth, device registry, session lifecycle
-├── transport/            # WebSocket/TCP transport, TLS context, port tunneling
-├── ui/                   # FastAPI dashboard, browser console HTML, Click CLI
-├── utils/                # Crypto helpers, structured logger, heartbeat
-├── service/              # Windows NSSM + Linux systemd service installers
-├── setup_and_launch.py   # One-click setup and launcher
-├── connect_remote.py     # Zero-touch remote agent connector
-└── build_standalone.py   # PyInstaller .exe builder
+┌─────────────┐        wss://          ┌──────────────┐        wss://          ┌─────────────┐
+│  Browser     │ ─────────────────────▶│  Relay        │◀───────────────────── │  Agent       │
+│  Dashboard   │  (operator, one       │  (owns every  │   (outbound only —    │  (runs on    │
+│  (dashboard  │   persistent WS       │   session's   │    agent never        │   target     │
+│   .html)     │   connection)         │   lifecycle)  │    listens)           │   machine)   │
+└─────────────┘                        └──────┬───────┘                        └─────────────┘
+                                               │
+                                        ┌──────┴───────┐
+                                        │  Dashboard    │   REST only: login, device
+                                        │  API          │   listing, session listing,
+                                        │  (dashboard   │   health. No session traffic
+                                        │   .py)        │   passes through here.
+                                        └──────────────┘
 ```
 
-## Quick Start
+The relay is the only thing either side ever has to reach: the agent dials out to it, and the operator's browser connects straight to it too. The dashboard's REST API is a separate, much smaller surface used only for login and read-only listings — it never sees screen frames, keystrokes, or file contents.
 
-**Requirements:** Python 3.8+
+Full component-by-component breakdown, wire protocol, and file-by-file reference: see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
+
+## Quick start
+
+**On the machine that will host the relay + dashboard** (the "controller" side):
 
 ```bash
-git clone <repo-url>
-cd nexus-ras-v2
-pip install -r requirements.txt
-
-# One-click setup: generates certs, initialises DB, starts relay + dashboard
 python setup_and_launch.py
-# Opens browser to http://localhost:8080
 ```
 
-Reset everything and start fresh:
+This will, in order: discover your LAN and public IP, generate a self-signed TLS certificate if one doesn't exist, attempt UPnP port mapping and a public tunnel (best-effort — safe to ignore if either isn't available on your network), start the relay and the dashboard API, and print a `SEND_TO_REMOTE_PC.txt` file with everything needed to connect an agent.
+
+Then open the dashboard:
+
+```
+https://localhost:8080/console
+```
+
+Default login is `admin` / `admin123` — **change this immediately**, it's a seeded placeholder, not a production credential.
+
+**On the machine you want to control** (the "agent" side), send that person `SEND_TO_REMOTE_PC.txt` and have them run the one-line command it contains, or:
 
 ```bash
-python setup_and_launch.py --reset
+python connect_remote.py --relay wss://<relay-address>:7000 --token <agent-token>
 ```
 
-Start services without launching the browser:
+**First connection from a new browser?** If the relay is using a self-signed certificate (the default), your browser will refuse the WebSocket silently. Visit `https://<relay-address>:7000/` directly first, accept the certificate warning there, then reload the dashboard. This is a one-time step per browser per relay address — see [ARCHITECTURE.md § TLS](./ARCHITECTURE.md#tls--certificates) for the permanent fix (a real or internal-CA-signed cert).
 
-```bash
-python setup_and_launch.py --no-browser
+## Project structure
+
+```
+agents/       — BaseAgent + DesktopAgent/ServerAgent/IoTAgent/MobileAgent
+core/         — relay, session, auth, device registry (the actual server logic)
+config/       — settings.py + defaults.yaml
+utils/        — crypto, logging, heartbeat, rate limiting
+transport/    — TCP/TLS/tunnel/WebSocket transport primitives
+ui/           — dashboard.py (REST API) + dashboard.html (operator console)
+connect_remote.py, nexus_agent_entry.py, build_standalone.py, setup_and_launch.py
+              — agent launcher, PyInstaller entry point/build, host setup script
 ```
 
-## Configuration
+See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for what every single file does and how they connect.
 
-Configuration is loaded in priority order: environment variables > `.env` file > `config/defaults.yaml`.
+## Known limitations (v1)
 
-Copy `.env` and adjust for your environment:
+Being direct about this so nobody finds out the hard way:
 
-```bash
-cp .env .env.local
-```
+- **Single-process, in-memory state.** `device_registry` and `session_manager` are process-local singletons. One relay process, one source of truth — no horizontal scaling, no shared state across multiple relay instances, and a process restart forgets every device and session.
+- **Rate limiting exists but isn't wired up.** `utils/heartbeat.py` has a working `RateLimiter`, and `defaults.yaml` has rate-limit config values, but nothing in `relay.py` or `dashboard.py` actually calls it yet. Don't rely on it being enforced.
+- **Self-signed certs by default.** Fine for a LAN or a small trusted team; every new browser has to manually accept the cert once (see Quick Start). For anything wider, get a real certificate or stand up an internal CA.
+- **No horizontal/HA story.** This is built for one relay serving one team, not a multi-tenant SaaS deployment.
+- **UPnP/public-tunnel auto-setup is best-effort.** If your router doesn't support UPnP or the tunnel binary isn't available, `setup_and_launch.py` falls back to LAN-only and tells you so — it won't silently pretend WAN access works when it doesn't (this was a real bug in an earlier build; it's fixed, but worth knowing the fallback exists).
+- **First real version.** Treat it as exactly that. Test in your own environment before pointing it at anything you can't afford to lose access to.
 
-Key variables:
+## Contributing
 
-```env
-NEXUS_RELAY_HOST=0.0.0.0
-NEXUS_RELAY_PORT=7000
-NEXUS_AUTH_SECRET_KEY=<generate with: python -c "import secrets; print(secrets.token_hex(32))">
-NEXUS_TLS_CERT_FILE=certs/nexus-relay-server.crt
-NEXUS_TLS_KEY_FILE=certs/nexus-relay-server.key
-NEXUS_TLS_CA_FILE=certs/ca.crt
-NEXUS_AGENT_SCREEN_FPS=15
-NEXUS_AGENT_SCREEN_QUALITY=75
-NEXUS_DEBUG=false
-NEXUS_LOG_LEVEL=INFO
-NEXUS_LOG_FORMAT=json
-```
-
-## Running Components Individually
-
-```bash
-# Relay server
-python -m core.relay --host 0.0.0.0 --port 7000
-
-# Dashboard API
-uvicorn ui.dashboard:app --host 0.0.0.0 --port 8080
-
-# Desktop agent (connects to relay)
-python -m agents.desktop_agent \
-  --relay wss://your-server:7000 \
-  --device-id workstation-01 \
-  --token <agent-token>
-
-# Server/headless agent
-python -m agents.server_agent \
-  --relay wss://your-server:7000 \
-  --device-id server-01 \
-  --token <agent-token>
-```
-
-## CLI Usage
-
-```bash
-python -m ui.cli devices              # List registered devices
-python -m ui.cli devices --online-only
-python -m ui.cli sessions             # Active sessions
-python -m ui.cli stats                # Relay health and metrics
-python -m ui.cli shell --device <id>  # Interactive remote terminal
-python -m ui.cli upload --device <id> --src ./file --dst /remote/path
-python -m ui.cli download --device <id> --src /remote/file --dst ./local/
-```
-
-## Service Deployment
-
-### Windows (NSSM)
-
-```bash
-# Install as a Windows service (runs before user login)
-python service/windows_service.py install \
-  --relay wss://your-server:7000 \
-  --device-id workstation-01 \
-  --token <agent-token>
-
-python service/windows_service.py start
-python service/windows_service.py status
-python service/windows_service.py uninstall
-```
-
-### Linux (systemd)
-
-```bash
-sudo python service/linux_service.py install \
-  --relay wss://your-server:7000 \
-  --device-id server-01 \
-  --token <agent-token> \
-  --user nexus
-
-sudo python service/linux_service.py start
-sudo python service/linux_service.py logs
-sudo python service/linux_service.py uninstall
-```
-
-The generated systemd unit includes security hardening: `NoNewPrivileges`, `ProtectSystem=strict`, 256 MB memory limit, and 25% CPU quota.
-
-## Zero-Touch Remote Deployment
-
-Send `connect_remote.py` to a remote machine along with the connection instructions in `SEND_TO_REMOTE_PC.txt`. The script reads credentials from the state file and registers the agent automatically:
-
-```bash
-python connect_remote.py
-```
-
-## Standalone Build
-
-Build a single-file executable (no Python required on target):
-
-```bash
-python build_standalone.py
-# Output: dist/nexus-agent.exe (Windows) or dist/nexus-agent (Linux/macOS)
-```
-
-## Security
-
-| Control | Implementation |
-|---------|---------------|
-| Transport encryption | TLS 1.2+ (optional mTLS with client certificates) |
-| Session encryption | ECDH P-256 + HKDF → AES-256-GCM |
-| Password storage | bcrypt |
-| Tokens | JWT HS256, 60-minute TTL with refresh |
-| MFA | TOTP (RFC 6238) |
-| Login lockout | 5 failed attempts → 15-minute block |
-| Rate limiting | 10 auth req/min per IP, 500 msg/10s per connection |
-| Audit log | `logs/audit.log` — all auth and session events |
-| RBAC | ADMIN / OPERATOR / VIEWER / AGENT |
-
-> **Note:** OS-level recording indicators (Windows, macOS) cannot be suppressed by design — this is intentional for endpoint transparency.
-
-**Before deploying to production:**
-- Rotate `NEXUS_AUTH_SECRET_KEY` to a fresh 32-byte secret
-- Replace self-signed certs with CA-issued certificates or configure mTLS
-- Set `NEXUS_DEBUG=false`
-
-## API Reference
-
-The dashboard exposes a REST + WebSocket API when running:
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/auth/login` | POST | Obtain JWT access + refresh tokens |
-| `/auth/refresh` | POST | Refresh access token |
-| `/auth/logout` | POST | Invalidate session |
-| `/devices` | GET | List registered devices |
-| `/devices/{id}` | GET | Device detail and metrics |
-| `/sessions` | GET/POST | List or create sessions |
-| `/sessions/{id}` | DELETE | Close a session |
-| `/ws/controller` | WS | Real-time screen + input proxy |
-| `/health` | GET | Relay health check |
-
-Interactive docs available at `http://localhost:8080/docs` when `NEXUS_DEBUG=true`.
-
-## Known Limitations
-
-- No P2P (WebRTC roadmap) — all traffic routes through the relay
-- File transfer optimised for files under ~500 MB
-- Clipboard sync is text-only (no binary objects)
-- Session recording infrastructure exists but playback is not yet implemented
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for the v1 → v2 migration guide and full list of bug fixes and new features.
+Standard flow: fork, branch, PR. If you're touching `core/relay.py` or `core/session.py`, read the wire protocol section of `ARCHITECTURE.md` first — the session lifecycle is entirely relay-owned by design, and it's easy to reintroduce a split-brain between the relay and the dashboard API if you're not careful about which one is supposed to own what.
 
 ## License
 
-Private / proprietary. All rights reserved.
+Add your license of choice here before publishing.

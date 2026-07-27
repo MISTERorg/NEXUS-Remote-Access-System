@@ -1,58 +1,101 @@
 """
 setup_and_launch.py
 --------------------
-NEXUS One-Click Setup & Launcher.
+NEXUS One-Click Setup & Automated Launcher.
 
-Fixes vs previous version:
-  - Runs relay + dashboard in the SAME process (no separate windows that
-    silently fail due to missing imports or wrong working directory)
-  - Installs ALL missing pip packages automatically before starting
-  - Verifies each service is actually listening before opening browser
-  - Forces NEXUS_DEBUG=true so /docs page is always available
-  - Handles the relay WS server and FastAPI app in parallel async tasks
-  - No dependency on uvicorn being on PATH — imports it directly
-
-Run from the nexus-ras root directory:
-    python setup_and_launch.py
-
-Options:
-    --launch-only   Skip setup, use existing .env
-    --reset         Regenerate .env and certs from scratch
-    --no-browser    Don't open any browser window
-    --no-dashboard  Don't open the operator console (dashboard.html)
-    --no-docs       Don't open the FastAPI /docs page
-    --yes, -y       Skip the "what should launch" prompt, open console + docs
-    --port-api N    Dashboard port (default 8080)
-    --port-relay N  Relay port (default 7000)
+Fully automated connection fixes included:
+  1. Windows Firewall Rule Creation (Inbound TCP 7000 & 8080)
+  2. Router UPnP Port Forwarding Discovery
+  3. Automatic Reverse SSH Tunneling (CGNAT / NAT Bypass)
+  4. Multi-IP LAN + WAN + Tunnel Config Generation
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
 import sys
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
 
-# ── paths ────────────────────────────────────────────────────────────────────
-BASE_DIR   = Path(__file__).resolve().parent
+# ── 0. Windows DLL Path Resolution & Preload ──────────────────────────────────
+if sys.platform == "win32":
+    dll_candidates = []
+
+    if getattr(sys, "frozen", False):
+        bundle_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        dll_candidates.extend([
+            bundle_dir,
+            bundle_dir / "dlls",
+            bundle_dir / "Library" / "bin",
+            Path(sys.executable).parent,
+            Path(sys.executable).parent / "DLLs",
+        ])
+
+    dll_candidates.extend([
+        Path(sys.prefix) / "DLLs",
+        Path(sys.prefix) / "Library" / "bin",
+        Path(sys.prefix),
+        Path(getattr(sys, "base_prefix", sys.prefix)) / "DLLs",
+        Path(getattr(sys, "base_prefix", sys.prefix)) / "Library" / "bin",
+        Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32",
+    ])
+
+    for p in dll_candidates:
+        if p.exists() and p.is_dir():
+            p_str = str(p.resolve())
+            if p_str not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = p_str + os.path.pathsep + os.environ.get("PATH", "")
+            if hasattr(os, "add_dll_directory"):
+                try:
+                    os.add_dll_directory(p_str)
+                except Exception:
+                    pass
+
+    try:
+        import ctypes
+    except Exception:
+        for p in dll_candidates:
+            if not p.exists():
+                continue
+            for ffi_name in ("libffi-8.dll", "libffi-7.dll", "libffi.dll", "ffi.dll"):
+                ffi_path = p / ffi_name
+                if ffi_path.exists():
+                    try:
+                        ctypes.CDLL(str(ffi_path))
+                    except Exception:
+                        pass
+
+
+# ── 1. Path & Import Setup ───────────────────────────────────────────────────
+if getattr(sys, "frozen", False):
+    BASE_DIR   = Path(sys.executable).resolve().parent
+    BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR)).resolve()
+else:
+    BASE_DIR   = Path(__file__).resolve().parent
+    BUNDLE_DIR = BASE_DIR
+
 ENV_FILE   = BASE_DIR / ".env"
 STATE_FILE = BASE_DIR / ".nexus_state.json"
 CERTS_DIR  = BASE_DIR / "certs"
 
-# Operator console (dashboard.html). Checked in a few likely spots so this
-# works whether you dropped it in the project root or under ui/.
 DASHBOARD_HTML_CANDIDATES = [
     BASE_DIR / "dashboard.html",
     BASE_DIR / "ui" / "dashboard.html",
     BASE_DIR / "ui" / "console.html",
+    BUNDLE_DIR / "dashboard.html",
+    BUNDLE_DIR / "ui" / "dashboard.html",
+    BUNDLE_DIR / "ui" / "console.html",
 ]
-
 
 def find_dashboard_html() -> Path | None:
     for candidate in DASHBOARD_HTML_CANDIDATES:
@@ -60,124 +103,282 @@ def find_dashboard_html() -> Path | None:
             return candidate
     return None
 
-# Make sure Python can find our modules
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+for path_str in (str(BASE_DIR), str(BUNDLE_DIR)):
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
 
-# ── colours ──────────────────────────────────────────────────────────────────
+# ── Console Formatting Utilities ──────────────────────────────────────────────
 if sys.platform == "win32":
-    os.system("color")   # enable ANSI on Windows
+    os.system("color")
 
 def _c(code, text): return f"\033[{code}m{text}\033[0m"
 def ok(m):   print(_c("92", f"  ✓  {m}"))
 def info(m): print(_c("96", f"  →  {m}"))
 def warn(m): print(_c("93", f"  ⚠  {m}"))
-def err(m):  print(_c("91", f"  ✗  {m}")); 
+def err(m):  print(_c("91", f"  ✗  {m}"))
 def hdr(m):  print(_c("1;96", f"\n{'─'*54}\n  {m}\n{'─'*54}"))
 def dim(m):  print(_c("2",  f"     {m}"))
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 1. Package installer — runs BEFORE any project imports
+# AUTOMATION SOLUTION 1 — Windows Firewall Management
 # ════════════════════════════════════════════════════════════════════════════
 
-REQUIRED_PACKAGES = {
-    "fastapi":           "fastapi",
-    "uvicorn":           "uvicorn[standard]",
-    "websockets":        "websockets",
-    "cryptography":      "cryptography",
-    "jwt":               "PyJWT",
-    "bcrypt":            "bcrypt",
-    "pydantic":          "pydantic",
-    "pydantic_settings": "pydantic-settings",
-    "httpx":             "httpx",
-    "psutil":            "psutil",
-    "mss":               "mss",
-    "PIL":               "Pillow",
-    "pynput":            "pynput",
-    "click":             "click",
-    "rich":              "rich",
-    "aiofiles":          "aiofiles",
-    "aiosqlite":         "aiosqlite",
-    "sqlalchemy":        "sqlalchemy",
-    "structlog":         "structlog",
-}
-
-def install_missing_packages() -> None:
-    hdr("Checking Dependencies")
-    missing_installs = []
-    for import_name, pip_name in REQUIRED_PACKAGES.items():
-        try:
-            __import__(import_name)
-        except ImportError:
-            missing_installs.append(pip_name)
-
-    if not missing_installs:
-        ok("All packages already installed")
+def auto_configure_windows_firewall(ports: list[int]) -> None:
+    """Automatically adds Windows Firewall inbound rules for specified ports."""
+    if sys.platform != "win32":
         return
 
-    warn(f"Missing: {', '.join(missing_installs)}")
-    info("Installing now — this may take a minute...")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--quiet"] + missing_installs,
-        capture_output=False
+    hdr("Automated Network Setup — Windows Firewall")
+    for port in ports:
+        rule_name = f"NEXUS_Inbound_Port_{port}"
+        info(f"Checking Windows Firewall for port {port}...")
+
+        # Check if rule exists
+        chk = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={rule_name}"],
+            capture_output=True, text=True
+        )
+
+        if "No rules match" in chk.stdout or chk.returncode != 0:
+            info(f"Adding inbound rule for TCP port {port}...")
+            cmd = [
+                "netsh", "advfirewall", "firewall", "add", "rule",
+                f"name={rule_name}", "dir=in", "action=allow",
+                "protocol=TCP", f"localport={port}"
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode == 0:
+                ok(f"Firewall rule added successfully for port {port}")
+            else:
+                warn(f"Could not automatically add firewall rule for port {port} (Requires Admin)")
+                dim("If remote connection fails on LAN, run CMD as Administrator and execute:")
+                dim(f"netsh advfirewall firewall add rule name={rule_name} dir=in action=allow protocol=TCP localport={port}")
+        else:
+            ok(f"Firewall rule for port {port} already exists")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# AUTOMATION SOLUTION 2 — UPnP Automatic Router Port Forwarding
+# ════════════════════════════════════════════════════════════════════════════
+
+def auto_setup_upnp_port_mapping(port: int) -> bool:
+    """Attempts UPnP SSDP discovery and SOAP port mapping on local gateway router."""
+    hdr("Automated Network Setup — Router UPnP Port Forwarding")
+    info(f"Discovering UPnP gateway router for port {port}...")
+
+    ssdp_request = (
+        "M-SEARCH * HTTP/1.1\r\n"
+        "HOST: 239.255.255.250:1900\r\n"
+        'MAN: "ssdp:discover"\r\n'
+        "MX: 2\r\n"
+        "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n"
     )
-    if result.returncode == 0:
-        ok("All packages installed successfully")
-    else:
-        err("Some packages failed to install — check output above")
-        sys.exit(1)
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.settimeout(2.5)
+        sock.sendto(ssdp_request.encode(), ("239.255.255.250", 1900))
+
+        location_url = None
+        while True:
+            try:
+                data, _ = sock.recvfrom(2048)
+                resp = data.decode(errors="ignore")
+                for line in resp.splitlines():
+                    if line.lower().startswith("location:"):
+                        location_url = line.split(":", 1)[1].strip()
+                        break
+                if location_url:
+                    break
+            except socket.timeout:
+                break
+        sock.close()
+
+        if not location_url:
+            warn("UPnP router discovery timed out (UPnP may be disabled on router)")
+            return False
+
+        info(f"Found Router UPnP endpoint: {location_url}")
+        req = urllib.request.Request(location_url)
+        with urllib.request.urlopen(req, timeout=3) as response:
+            xml_data = response.read().decode()
+
+        # Extract control URL
+        control_match = re.search(r"<controlURL>(.*?)</controlURL>", xml_data, re.IGNORECASE)
+        if not control_match:
+            warn("Could not find UPnP control URL in router description")
+            return False
+
+        control_path = control_match.group(1)
+        parsed_loc = urlparse(location_url)
+        control_url = f"{parsed_loc.scheme}://{parsed_loc.netloc}{control_path}"
+
+        local_ip = get_lan_ip()
+        soap_body = f"""<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:AddPortMapping xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">
+      <NewRemoteHost></NewRemoteHost>
+      <NewExternalPort>{port}</NewExternalPort>
+      <NewProtocol>TCP</NewProtocol>
+      <NewInternalPort>{port}</NewInternalPort>
+      <NewInternalClient>{local_ip}</NewInternalClient>
+      <NewEnabled>1</NewEnabled>
+      <NewPortMappingDescription>NEXUS Relay</NewPortMappingDescription>
+      <NewLeaseDuration>0</NewLeaseDuration>
+    </u:AddPortMapping>
+  </s:Body>
+</s:Envelope>"""
+
+        headers = {
+            "Content-Type": 'text/xml; charset="utf-8"',
+            "SOAPAction": '"urn:schemas-upnp-org:service:WANIPConnection:1#AddPortMapping"',
+        }
+
+        post_req = urllib.request.Request(control_url, data=soap_body.encode("utf-8"), headers=headers)
+        with urllib.request.urlopen(post_req, timeout=4) as post_resp:
+            if post_resp.status in (200, 201):
+                ok(f"UPnP Port Forwarding mapped successfully! ({port} -> {local_ip}:{port})")
+                return True
+    except Exception as e:
+        warn(f"UPnP port mapping attempt finished: {e}")
+    return False
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 2. IP detection
+# AUTOMATION SOLUTION 3 — Automatic Internet Reverse SSH Tunneling
 # ════════════════════════════════════════════════════════════════════════════
+
+GLOBAL_TUNNEL_PROC: subprocess.Popen | None = None
+
+def auto_start_public_tunnel(local_port: int) -> str | None:
+    """
+    Spawns an automated reverse SSH tunnel to create a public WSS address.
+    Requires no router configuration and bypasses CGNAT completely.
+    """
+    global GLOBAL_TUNNEL_PROC
+    hdr("Automated Network Setup — Public Tunnel Creation")
+    info("Establishing zero-config public internet tunnel via SSH...")
+
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "ServerAliveInterval=15",
+        "-p", "443",
+        f"-R0:localhost:{local_port}",
+        "qr@a.pinggy.io"
+    ]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        GLOBAL_TUNNEL_PROC = proc
+
+        start_time = time.time()
+        tunnel_url = None
+
+        while time.time() - start_time < 10:
+            if proc.poll() is not None:
+                break
+            line = proc.stdout.readline() if proc.stdout else ""
+            if not line:
+                time.sleep(0.1)
+                continue
+
+            # Look for pinggy URL outputs
+            m = re.search(r"(https?://[a-zA-Z0-9\.\-]+\.pinggy\.[a-z]+|tcp://[a-zA-Z0-9\.\-]+:[0-9]+)", line)
+            if m:
+                raw_url = m.group(1)
+                if raw_url.startswith("https://"):
+                    tunnel_url = raw_url.replace("https://", "wss://")
+                elif raw_url.startswith("http://"):
+                    tunnel_url = raw_url.replace("http://", "ws://")
+                elif raw_url.startswith("tcp://"):
+                    tunnel_url = raw_url.replace("tcp://", "wss://")
+                break
+
+        if tunnel_url:
+            ok(f"Public Tunnel Active: {tunnel_url}")
+            return tunnel_url
+        else:
+            warn("Public SSH tunnel could not parse an endpoint URL within timeout")
+    except FileNotFoundError:
+        warn("SSH client not found in PATH — skipping automated tunnel creation")
+    except Exception as e:
+        warn(f"Tunnel creation failed: {e}")
+
+    return None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# IP Discovery Utilities
+# ════════════════════════════════════════════════════════════════════════════
+
+def get_lan_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 
 def get_public_ip() -> str:
+    """
+    Discover the machine's public/WAN-facing IP.
+
+    Checks NEXUS_PUBLIC_IP first — set this explicitly if this host has no
+    direct internet egress to the lookup services below (corporate proxy,
+    outbound firewall, air-gapped test network, etc.), or if the discovered
+    IP isn't the one that actually routes inbound traffic to this machine
+    (e.g. behind a NAT you've manually port-forwarded on a router with a
+    different public IP than what a plain outbound request would reveal).
+
+    IMPORTANT: if every lookup service fails AND no override is set, this
+    falls back to get_lan_ip() — meaning the "public" IP becomes a private
+    RFC1918 address that is NOT reachable from outside the LAN. Callers
+    (run_setup, print_and_save_instructions) are responsible for detecting
+    that condition (public_ip == lan_ip) and warning the user loudly; this
+    function only logs why each individual lookup attempt failed.
+    """
+    override = os.environ.get("NEXUS_PUBLIC_IP", "").strip()
+    if override:
+        if _valid_ip(override):
+            ok(f"Using NEXUS_PUBLIC_IP override: {override}")
+            return override
+        warn(f"NEXUS_PUBLIC_IP is set but not a valid IPv4 address ({override!r}) — ignoring it")
+
     services = [
         "https://api.ipify.org",
         "https://ifconfig.me/ip",
         "https://checkip.amazonaws.com",
         "https://icanhazip.com",
     ]
-
-    # Try curl (available on Win10+ and most Linux/Mac)
     for url in services:
         try:
-            r = subprocess.run(
-                ["curl", "-s", "--max-time", "5", url],
-                capture_output=True, text=True
-            )
-            ip = r.stdout.strip()
-            if _valid_ip(ip):
-                return ip
-        except FileNotFoundError:
-            break
+            req = urllib.request.Request(url, headers={"User-Agent": "curl/7.68.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                ip = resp.read().decode().strip()
+                if _valid_ip(ip):
+                    return ip
+                dim(f"Public IP lookup via {url} returned an unparseable response: {ip!r}")
+        except Exception as e:
+            dim(f"Public IP lookup via {url} failed: {e}")
+            continue
 
-    # Try urllib
-    try:
-        import urllib.request
-        for url in services:
-            try:
-                with urllib.request.urlopen(url, timeout=5) as resp:
-                    ip = resp.read().decode().strip()
-                    if _valid_ip(ip):
-                        return ip
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    # Fall back to LAN IP
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        warn(f"Could not reach internet IP services — using LAN IP: {ip}")
-        return ip
-    except Exception:
-        return "127.0.0.1"
+    warn("Could not reach any public IP lookup service — this host may have no direct")
+    warn("internet egress (proxy/firewall/air-gapped network). Falling back to LAN IP,")
+    warn("which will NOT be reachable from outside this network. Set NEXUS_PUBLIC_IP")
+    warn("manually to fix this, or rely on the tunnel URL if one gets created below.")
+    return get_lan_ip()
 
 
 def _valid_ip(s: str) -> bool:
@@ -190,8 +391,19 @@ def _valid_ip(s: str) -> bool:
         return False
 
 
+def _wan_ip_is_fallback(public_ip: str, lan_ip: str) -> bool:
+    """
+    True when get_public_ip() had to degrade to the LAN IP (every external
+    lookup service failed and no NEXUS_PUBLIC_IP override was set). Public
+    and LAN IPs occupy disjoint address spaces in practice, so an exact
+    string match here is a reliable signal that the fallback happened, not
+    a coincidence.
+    """
+    return public_ip == lan_ip
+
+
 # ════════════════════════════════════════════════════════════════════════════
-# 3. Setup: secrets, .env, certs
+# Setup, Certs, and Config Writing
 # ════════════════════════════════════════════════════════════════════════════
 
 def load_state() -> dict:
@@ -205,17 +417,11 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2))
-    if sys.platform == "win32":
-        try:
-            subprocess.run(["attrib", "+H", str(STATE_FILE)], capture_output=True)
-        except Exception:
-            pass
 
 
-def write_env(public_ip: str, agent_token: str, jwt_secret: str,
+def write_env(public_ip: str, lan_ip: str, agent_token: str, jwt_secret: str,
               relay_port: int, api_port: int) -> None:
-    ENV_FILE.write_text(f"""# NEXUS Remote Access — auto-generated by setup_and_launch.py
-
+    content = f"""# NEXUS Remote Access — auto-generated
 NEXUS_ENVIRONMENT=development
 NEXUS_DEBUG=true
 NEXUS_APP_NAME=NEXUS Remote Access
@@ -238,81 +444,114 @@ NEXUS_AGENT_RECONNECT_MAX_RETRIES=20
 
 NEXUS_LOG_LEVEL=INFO
 NEXUS_LOG_FORMAT=console
-
-# Reference info
-# Public IP   : {public_ip}
-# Agent token : {agent_token}
-# Relay port  : {relay_port}
-# API port    : {api_port}
-""", encoding="utf-8")
+"""
+    ENV_FILE.write_text(content, encoding="utf-8")
+    os.environ["NEXUS_AUTH_SECRET_KEY"] = jwt_secret
+    os.environ["NEXUS_RELAY_PORT"] = str(relay_port)
+    os.environ["NEXUS_RELAY_HOST"] = "0.0.0.0"
 
 
 def generate_certs() -> None:
+    CERTS_DIR.mkdir(parents=True, exist_ok=True)
     cert_file = CERTS_DIR / "nexus-relay-server.crt"
-    if cert_file.exists():
-        ok("Certificates already exist — skipping")
+    key_file  = CERTS_DIR / "nexus-relay-server.key"
+
+    if cert_file.exists() and key_file.exists():
+        ok("Certificates present")
         return
+
     info("Generating TLS certificates...")
-    result = subprocess.run(
-        [sys.executable, "-m", "utils.crypto",
-         "--generate-certs", "--out", str(CERTS_DIR)],
-        capture_output=True, text=True, cwd=str(BASE_DIR)
-    )
-    if result.returncode == 0:
-        ok("Certificates generated")
-    else:
-        warn("Certificate generation failed — continuing without TLS (OK for LAN)")
-        dim(result.stderr[:300])
+    def _sync(c, k):
+        cert_file.write_bytes(c)
+        key_file.write_bytes(k)
+        (CERTS_DIR / "relay.crt").write_bytes(c)
+        (CERTS_DIR / "relay.key").write_bytes(k)
 
+    try:
+        import ipaddress
+        from datetime import datetime, timedelta, timezone
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
 
-def ensure_dirs() -> None:
-    for d in ["certs", "data", "logs", "recordings"]:
-        (BASE_DIR / d).mkdir(parents=True, exist_ok=True)
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "nexus.local")])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.now(timezone.utc))
+            .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+            .add_extension(
+                x509.SubjectAlternativeName([
+                    x509.DNSName("nexus.local"),
+                    x509.DNSName("localhost"),
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                ]),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
+        )
+        kb = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
+        cb = cert.public_bytes(serialization.Encoding.PEM)
+        _sync(cb, kb)
+        ok("Self-signed TLS certificates generated")
+    except Exception as e:
+        warn(f"Certificate generation notice: {e}")
 
 
 def run_setup(relay_port: int, api_port: int, force_reset: bool) -> dict:
-    """Full first-time setup. Returns state dict with ip + token."""
     state = load_state()
 
     if ENV_FILE.exists() and not force_reset and state.get("agent_token"):
         hdr("Existing Config Detected")
-        ok(f"Using saved config  (run --reset to regenerate)")
-        ok(f"Public IP   : {state.get('public_ip','?')}")
-        ok(f"Agent token : {state['agent_token'][:20]}…")
+        cached_public_ip = state.get("public_ip", "?")
+        cached_lan_ip = state.get("lan_ip", "?")
+        ok(f"Public WAN IP : {cached_public_ip}")
+        ok(f"Local LAN IP  : {cached_lan_ip}")
+        ok(f"Agent Token   : {state['agent_token'][:20]}…")
+        if _wan_ip_is_fallback(cached_public_ip, cached_lan_ip):
+            warn("This cached config has WAN IP == LAN IP from a previous run where public")
+            warn("IP discovery failed. It will keep being reused as-is until you run with")
+            warn("--reset (or set NEXUS_PUBLIC_IP and then --reset) to rediscover it.")
+        generate_certs()
         return state
 
-    if force_reset and ENV_FILE.exists():
-        ENV_FILE.unlink()
-        info("Cleared existing .env")
-
-    hdr("Step 1 — Detecting Your Public IP")
+    hdr("Step 1 — Network IP Discovery")
+    lan_ip = get_lan_ip()
     public_ip = get_public_ip()
-    ok(f"Public IP: {public_ip}")
+    ok(f"Local LAN IP  : {lan_ip}")
+    if _wan_ip_is_fallback(public_ip, lan_ip):
+        warn(f"Public WAN IP : {public_ip}  (fallback — see warning above)")
+    else:
+        ok(f"Public WAN IP : {public_ip}")
 
-    hdr("Step 2 — Generating Secrets")
+    hdr("Step 2 — Generating Credentials")
     agent_token = secrets.token_urlsafe(32)
     jwt_secret  = secrets.token_urlsafe(48)
     ok(f"Agent token : {agent_token[:20]}…")
-    ok(f"JWT secret  : {jwt_secret[:16]}…")
 
-    hdr("Step 3 — Writing .env")
-    write_env(public_ip, agent_token, jwt_secret, relay_port, api_port)
-    ok(f".env written → {ENV_FILE}")
+    hdr("Step 3 — Environment Configuration")
+    write_env(public_ip, lan_ip, agent_token, jwt_secret, relay_port, api_port)
 
-    state = {"public_ip": public_ip, "agent_token": agent_token,
-             "jwt_secret": jwt_secret, "relay_port": relay_port,
-             "api_port": api_port}
+    state = {
+        "public_ip": public_ip,
+        "lan_ip": lan_ip,
+        "agent_token": agent_token,
+        "jwt_secret": jwt_secret,
+        "relay_port": relay_port,
+        "api_port": api_port
+    }
     save_state(state)
-    ok("State saved to .nexus_state.json")
-
-    hdr("Step 4 — TLS Certificates")
     generate_certs()
-
     return state
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 4. Port checker
+# Service Launchers
 # ════════════════════════════════════════════════════════════════════════════
 
 def port_in_use(port: int) -> bool:
@@ -320,189 +559,149 @@ def port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def wait_for_port(port: int, timeout: int = 30, label: str = "") -> bool:
-    info(f"Waiting for {label or f'port {port}'} to be ready...")
+async def wait_for_port_async(port: int, timeout: int = 15, label: str = "") -> bool:
     for i in range(timeout):
         if port_in_use(port):
-            ok(f"{label or f'Port {port}'} is up ✓")
+            ok(f"{label or f'Port {port}'} is online")
             return True
-        time.sleep(1)
-        if i % 5 == 4:
-            dim(f"  still waiting… ({i+1}s)")
-    err(f"{label} did not start within {timeout}s")
+        await asyncio.sleep(1)
     return False
 
 
+async def start_relay(relay_port: int):
+    from core.relay import RelayServer
+    from config.settings import settings
+
+    settings.relay.host = "0.0.0.0"
+    settings.relay.port = relay_port
+
+    cert_file = CERTS_DIR / "nexus-relay-server.crt"
+    key_file  = CERTS_DIR / "nexus-relay-server.key"
+    if not cert_file.exists():
+        cert_file = CERTS_DIR / "relay.crt"
+        key_file  = CERTS_DIR / "relay.key"
+
+    if hasattr(settings, "tls"):
+        tls_cfg = settings.tls
+        if cert_file.exists() and key_file.exists():
+            tls_cfg.cert_file = cert_file
+            tls_cfg.key_file = key_file
+            tls_cfg.require_client_cert = False
+
+    relay = RelayServer()
+    try:
+        await relay.start()
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        if hasattr(relay, "stop") and callable(relay.stop):
+            await relay.stop()
+        raise
+
+
+async def start_dashboard(api_port: int):
+    import uvicorn
+    from ui.dashboard import app
+    config = uvicorn.Config(app, host="0.0.0.0", port=api_port, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 # ════════════════════════════════════════════════════════════════════════════
-# 5. Launch relay + dashboard as subprocesses with visible output
+# Config Instructions Generator
 # ════════════════════════════════════════════════════════════════════════════
 
-def launch_services(relay_port: int, api_port: int) -> tuple:
-    """
-    Launch relay and dashboard as subprocesses.
-    Output goes to log files AND to new CMD windows on Windows.
-    Returns (relay_proc, dashboard_proc).
-    """
-    logs_dir = BASE_DIR / "logs"
-    logs_dir.mkdir(exist_ok=True)
+def print_and_save_instructions(state: dict, tunnel_url: str | None) -> None:
+    public_ip   = state.get("public_ip", "127.0.0.1")
+    lan_ip      = state.get("lan_ip", "127.0.0.1")
+    agent_token = state.get("agent_token", "")
+    relay_port  = state.get("relay_port", 7000)
+    api_port    = state.get("api_port", 8080)
 
-    relay_log     = open(logs_dir / "relay.log", "w")
-    dashboard_log = open(logs_dir / "dashboard.log", "w")
+    proto = "wss" if (CERTS_DIR / "nexus-relay-server.crt").exists() else "ws"
 
-    env = {**os.environ, "PYTHONPATH": str(BASE_DIR), "PYTHONUNBUFFERED": "1"}
+    wan_broken = _wan_ip_is_fallback(public_ip, lan_ip)
 
-    hdr("Step 5 — Starting Relay Server")
+    lan_cmd    = f"python connect_remote.py --relay {proto}://{lan_ip}:{relay_port} --token {agent_token}"
+    wan_cmd    = f"python connect_remote.py --relay {proto}://{public_ip}:{relay_port} --token {agent_token}"
+    tunnel_cmd = f"python connect_remote.py --relay {tunnel_url} --token {agent_token}" if tunnel_url else None
 
-    if port_in_use(relay_port):
-        warn(f"Port {relay_port} already in use — relay may already be running")
-        relay_proc = None
+    # Don't hand out the WAN command as "the" command to run on a remote PC
+    # when it's actually just the LAN IP in disguise — that command can only
+    # ever work for a machine already on this LAN, which defeats the point
+    # of it being labeled the WAN/primary path. Prefer the tunnel command in
+    # that case even though the normal preference order is tunnel > WAN.
+    if wan_broken and not tunnel_cmd:
+        primary_cmd = lan_cmd
     else:
-        relay_cmd = [
-            sys.executable, "-m", "core.relay",
-            "--host", "0.0.0.0",
-            "--port", str(relay_port),
-        ]
-        relay_proc = subprocess.Popen(
-            relay_cmd,
-            cwd=str(BASE_DIR),
-            env=env,
-            stdout=relay_log,
-            stderr=subprocess.STDOUT,
-        )
-        dim(f"Relay PID: {relay_proc.pid}  |  Log: logs/relay.log")
-
-        if not wait_for_port(relay_port, timeout=15, label="Relay Server"):
-            err("Relay failed to start. Check logs/relay.log for errors.")
-            relay_log.close()
-            _print_log_tail(logs_dir / "relay.log")
-            sys.exit(1)
-
-    hdr("Step 6 — Starting Dashboard API")
-
-    if port_in_use(api_port):
-        warn(f"Port {api_port} already in use — dashboard may already be running")
-        dashboard_proc = None
-    else:
-        dashboard_cmd = [
-            sys.executable, "-m", "uvicorn",
-            "ui.dashboard:app",
-            "--host", "0.0.0.0",
-            "--port", str(api_port),
-            "--log-level", "info",
-        ]
-        dashboard_proc = subprocess.Popen(
-            dashboard_cmd,
-            cwd=str(BASE_DIR),
-            env=env,
-            stdout=dashboard_log,
-            stderr=subprocess.STDOUT,
-        )
-        dim(f"Dashboard PID: {dashboard_proc.pid}  |  Log: logs/dashboard.log")
-
-        if not wait_for_port(api_port, timeout=20, label="Dashboard API"):
-            err("Dashboard failed to start. Check logs/dashboard.log for errors.")
-            dashboard_log.close()
-            _print_log_tail(logs_dir / "dashboard.log")
-            sys.exit(1)
-
-    return relay_proc, dashboard_proc
-
-
-def _print_log_tail(log_path: Path, lines: int = 30) -> None:
-    """Print last N lines of a log file for quick diagnosis."""
-    if not log_path.exists():
-        return
-    content = log_path.read_text(errors="replace").strip().splitlines()
-    print(_c("93", f"\n  ── Last {lines} lines of {log_path.name} ──"))
-    for line in content[-lines:]:
-        print(_c("2", f"  {line}"))
-    print()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# 6. Print agent command
-# ════════════════════════════════════════════════════════════════════════════
-
-def print_agent_command(public_ip: str, agent_token: str,
-                        relay_port: int, api_port: int,
-                        dashboard_path: Path | None = None) -> None:
-    one_liner = (
-        f"python connect_remote.py "
-        f"--relay ws://{public_ip}:{relay_port} "
-        f"--token {agent_token}"
-    )
+        primary_cmd = tunnel_cmd or wan_cmd
 
     hdr("HOW TO CONNECT THE REMOTE PC")
+
+    if wan_broken:
+        warn("Public WAN IP could not be determined — it is currently identical to the")
+        warn("LAN IP below. The WAN Relay URL will NOT work for a remote PC outside this")
+        warn("network. Set NEXUS_PUBLIC_IP and re-run with --reset to fix this.")
+        if tunnel_cmd:
+            warn("Use the Tunnel Relay URL below instead — it doesn't need a public IP.")
+        else:
+            warn("No Tunnel Relay URL was created this run either (check --no-tunnel or")
+            warn("your internet connectivity if you expected one).")
+
     print(f"""
-{_c('1', '  The remote person needs to do ONLY 2 things:')}
+  {_c('1', 'Command to run on the Remote PC:')}
 
-  {_c('1;93', 'STEP 1')} — Install Python (only needed once):
-  {_c('96',   '  https://www.python.org/downloads/')}
-  {_c('2',    '  (Tick "Add Python to PATH" during install)')}
+  {_c('1;92', primary_cmd)}
 
-  {_c('1;93', 'STEP 2')} — Send them the nexus-ras-v2 folder, then ask them
-            to open Command Prompt inside it and run:
-
-  {_c('1;92', one_liner)}
-
-  {_c('2', "That's it. Everything else (packages, config, connection)")}
-  {_c('2', 'is handled automatically by connect_remote.py.')}
+  {_c('2', '(This command and fallback URLs have been auto-saved to SEND_TO_REMOTE_PC.txt)')}
 """)
 
-    dashboard_line = (
-        f"http://localhost:{api_port}/console" if dashboard_path
-        else "not found — see warning above"
-    )
-
-    print(_c("1;96", "  ╔══════════════════════════════════════════════════╗"))
-    print(_c("1;96", f"  ║  Relay URL   :  ws://{public_ip}:{relay_port}"))
-    print(_c("1;93", f"  ║  Agent Token :  {agent_token}"))
-    print(_c("1;92", f"  ║  Dashboard   :  {dashboard_line}"))
-    print(_c("2",    f"  ║  API docs    :  http://localhost:{api_port}/docs"))
-    print(_c("2",    f"  ║  API Login   :  admin / admin123"))
-    print(_c("1;96", "  ╚══════════════════════════════════════════════════╝"))
+    print(_c("1;96", "  ╔════════════════════════════════════════════════════════════════════╗"))
+    if tunnel_url:
+        print(_c("1;92", f"  ║  Tunnel Relay (Public) : {tunnel_url}"))
+    print(_c("1;96", f"  ║  LAN Relay (Local)    : {proto}://{lan_ip}:{relay_port}"))
+    if wan_broken:
+        print(_c("1;91", f"  ║  WAN Relay (Direct)   : {proto}://{public_ip}:{relay_port}  [BROKEN — same as LAN IP]"))
+    else:
+        print(_c("1;96", f"  ║  WAN Relay (Direct)   : {proto}://{public_ip}:{relay_port}"))
+    print(_c("1;93", f"  ║  Agent Token          : {agent_token}"))
+    print(_c("1;92", f"  ║  Dashboard Console    : http://localhost:{api_port}/console"))
+    print(_c("1;96", "  ╚════════════════════════════════════════════════════════════════════╝"))
     print()
 
-    # Write the one-liner to a text file so it's easy to copy/paste/send
     snippet_file = BASE_DIR / "SEND_TO_REMOTE_PC.txt"
-    snippet_file.write_text(
-        f"NEXUS Remote Support — Instructions for the Remote PC\n"
-        f"{'='*54}\n\n"
-        f"STEP 1: Install Python from https://www.python.org/downloads/\n"
-        f"        Tick 'Add Python to PATH' during install.\n\n"
-        f"STEP 2: Open Command Prompt inside the nexus-ras-v2 folder and run:\n\n"
-        f"  {one_liner}\n\n"
-        f"That's it — everything else is automatic.\n\n"
-        f"{'='*54}\n"
-        f"Relay URL   : ws://{public_ip}:{relay_port}\n"
-        f"Agent Token : {agent_token}\n",
-        encoding="utf-8",
+    content = (
+        f"NEXUS Remote Support — Connection Configuration\n"
+        f"{'='*60}\n\n"
+        f"AUTOMATED ONE-LINE RUN COMMAND:\n"
+        f"  {primary_cmd}\n\n"
+        f"{'='*60}\n"
+        f"DETAILED CONNECTION ENDPOINTS:\n"
     )
-    ok(f"Instructions also saved → SEND_TO_REMOTE_PC.txt  (easy to email/share)")
+    if tunnel_url:
+        content += f"Tunnel Relay URL : {tunnel_url}\n"
+    content += (
+        f"LAN Relay URL    : {proto}://{lan_ip}:{relay_port}\n"
+        f"WAN Relay URL    : {proto}://{public_ip}:{relay_port}\n"
+        f"Agent Token      : {agent_token}\n"
+    )
+    if wan_broken:
+        content += (
+            f"\n"
+            f"WARNING: WAN Relay URL above is identical to the LAN Relay URL because\n"
+            f"public IP discovery failed on the host machine. It will only work for a\n"
+            f"remote PC already on the same local network. Set NEXUS_PUBLIC_IP and\n"
+            f"re-run setup_and_launch.py --reset on the host to fix this.\n"
+        )
+    snippet_file.write_text(content, encoding="utf-8")
+    ok("Instruction file updated → SEND_TO_REMOTE_PC.txt")
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ════════════════════════════════════════════════════════════════════════════
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="NEXUS One-Click Setup & Launcher")
-    parser.add_argument("--launch-only", action="store_true",
-                        help="Skip setup, use existing .env")
-    parser.add_argument("--reset", action="store_true",
-                        help="Force regenerate .env and certs")
-    parser.add_argument("--no-browser", action="store_true",
-                        help="Don't open browser automatically")
-    parser.add_argument("--no-dashboard", action="store_true",
-                        help="Don't open the operator console (dashboard.html) on launch")
-    parser.add_argument("--no-docs", action="store_true",
-                        help="Don't open the FastAPI /docs page on launch")
-    parser.add_argument("--yes", "-y", action="store_true",
-                        help="Skip the launch-mode prompt and open both console + docs")
-    parser.add_argument("--port-api",   type=int, default=8080)
-    parser.add_argument("--port-relay", type=int, default=7000)
-    args = parser.parse_args()
-
+async def async_main(args):
     RELAY_PORT = args.port_relay
     API_PORT   = args.port_api
 
@@ -513,113 +712,64 @@ def main() -> None:
   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║
   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║
   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝
-  Remote Access System — One-Click Launcher
+  Remote Access System — Automated Setup & Launcher
 """))
 
-    ensure_dirs()
+    # Automated Fixes Execution
+    if not args.no_firewall:
+        auto_configure_windows_firewall([RELAY_PORT, API_PORT])
 
-    # Step 0: install packages FIRST before any project imports
-    install_missing_packages()
+    if not args.no_upnp:
+        auto_setup_upnp_port_mapping(RELAY_PORT)
 
-    # Step 1-4: setup or load existing config
-    if args.launch_only and ENV_FILE.exists():
-        state = load_state()
-        if not state:
-            warn("No saved state found — running full setup")
-            state = run_setup(RELAY_PORT, API_PORT, force_reset=False)
-    else:
-        state = run_setup(RELAY_PORT, API_PORT, force_reset=args.reset)
+    tunnel_url = None
+    if not args.no_tunnel:
+        tunnel_url = auto_start_public_tunnel(RELAY_PORT)
 
-    public_ip   = state.get("public_ip",   "127.0.0.1")
-    agent_token = state.get("agent_token", "")
-    RELAY_PORT  = int(state.get("relay_port", RELAY_PORT))
-    API_PORT    = int(state.get("api_port",   API_PORT))
+    state = run_setup(RELAY_PORT, API_PORT, force_reset=args.reset)
 
-    # Step 5-6: launch relay + dashboard
-    relay_proc, dashboard_proc = launch_services(RELAY_PORT, API_PORT)
+    hdr("Starting Core Services")
+    relay_task = asyncio.create_task(start_relay(RELAY_PORT))
+    dash_task  = asyncio.create_task(start_dashboard(API_PORT))
 
-    # Step 7: open browser — operator console and/or FastAPI /docs
-    docs_url = f"http://localhost:{API_PORT}/docs"
-    health_url = f"http://localhost:{API_PORT}/health"
+    await wait_for_port_async(RELAY_PORT, label="Relay Server")
+    await wait_for_port_async(API_PORT, label="Dashboard API")
+
+    print_and_save_instructions(state, tunnel_url)
+
     dashboard_path = find_dashboard_html()
+    if not args.no_browser and dashboard_path:
+        webbrowser.open(f"http://localhost:{API_PORT}/console")
 
-    open_console = not args.no_dashboard
-    open_docs = not args.no_docs
-
-    if not args.no_browser:
-        hdr("Step 7 — Opening Browser")
-
-        # Ask which to open, unless the caller already decided via flags.
-        if not args.yes and not args.no_dashboard and not args.no_docs:
-            print(f"""
-  {_c('1', 'What should launch?')}
-
-  {_c('1;93', '[1]')} Operator console (dashboard.html)  {_c('2', '— recommended')}
-  {_c('1;93', '[2]')} FastAPI /docs page (raw API reference)
-  {_c('1;93', '[3]')} Both
-  {_c('1;93', '[4]')} Neither — I'll open things myself
-""")
-            choice = input(_c("96", "  Choose [1/2/3/4, default 1]: ")).strip() or "1"
-            open_console = choice in ("1", "3")
-            open_docs = choice in ("2", "3")
-
-        if open_console:
-            console_url = f"http://localhost:{API_PORT}/console"
-            if dashboard_path:
-                webbrowser.open(console_url)
-                ok(f"Operator console opened → {console_url}")
-            else:
-                warn("dashboard.html not found — checked: " +
-                     ", ".join(str(p) for p in DASHBOARD_HTML_CANDIDATES))
-                dim("Save the console file to one of those paths, then reload the page.")
-
-        if open_docs:
-            webbrowser.open(docs_url)
-            ok(f"Browser opened → {docs_url}")
-
-    # Step 8: print remote agent command
-    print_agent_command(public_ip, agent_token, RELAY_PORT, API_PORT, dashboard_path)
-
-    ok("All services running. Press Ctrl+C to stop everything.\n")
-    dim(f"  Relay log     → {BASE_DIR / 'logs' / 'relay.log'}")
-    dim(f"  Dashboard log → {BASE_DIR / 'logs' / 'dashboard.log'}")
-    dim(f"  Health check  → {health_url}")
-    if dashboard_path:
-        dim(f"  Console       → http://localhost:{API_PORT}/console")
-    else:
-        dim(f"  Console       → not found (place dashboard.html in project root or ui/)")
-    print()
-
-    # Keep the script alive — show live log tail & handle Ctrl+C
-    relay_log_path     = BASE_DIR / "logs" / "relay.log"
-    dashboard_log_path = BASE_DIR / "logs" / "dashboard.log"
+    ok("All services fully initialized. Press Ctrl+C to stop.")
 
     try:
-        while True:
-            time.sleep(5)
-            # Check processes haven't died
-            if relay_proc and relay_proc.poll() is not None:
-                err("Relay process died unexpectedly!")
-                _print_log_tail(relay_log_path)
-                break
-            if dashboard_proc and dashboard_proc.poll() is not None:
-                err("Dashboard process died unexpectedly!")
-                _print_log_tail(dashboard_log_path)
-                break
-    except KeyboardInterrupt:
-        print(_c("93", "\n\n  Shutting down NEXUS services..."))
-        for proc in [relay_proc, dashboard_proc]:
-            if proc:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-        ok("All services stopped. Goodbye.")
+        await asyncio.gather(relay_task, dash_task)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        pass
+    finally:
+        if GLOBAL_TUNNEL_PROC:
+            GLOBAL_TUNNEL_PROC.terminate()
+        relay_task.cancel()
+        dash_task.cancel()
+        ok("NEXUS services stopped cleanly.")
 
+
+def main():
+    parser = argparse.ArgumentParser(description="NEXUS Automated Launcher")
+    parser.add_argument("--reset", action="store_true", help="Force reset configuration")
+    parser.add_argument("--no-browser", action="store_true", help="Do not open browser")
+    parser.add_argument("--no-firewall", action="store_true", help="Skip Windows Firewall automation")
+    parser.add_argument("--no-upnp", action="store_true", help="Skip UPnP router port forwarding")
+    parser.add_argument("--no-tunnel", action="store_true", help="Skip public SSH tunnel creation")
+    parser.add_argument("--port-api", type=int, default=8080)
+    parser.add_argument("--port-relay", type=int, default=7000)
+    args = parser.parse_args()
+
+    try:
+        asyncio.run(async_main(args))
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
     main()
