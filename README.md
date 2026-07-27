@@ -20,12 +20,12 @@ Self-hosted remote desktop, terminal, and file-transfer platform. One relay serv
 
 - for presentation purposes, the demo was made on one node
 
-- ![img_4.png](img_4.png)
+![img_4.png](img_4.png)
 
 - **Remote terminal** — a real shell (PowerShell on Windows, `$SHELL` elsewhere) attached per session, streamed both ways.
 - **File browser & transfer** — list remote directories; upload/download between operator and agent.
-- ![img_5.png](img_5.png)
-- you get access to the target whole file system
+![img_5.png](img_5.png)
+you get access to the target whole file system
 
 - **Clipboard sync** — pull or push clipboard contents between operator and agent.
 - **Multi-device fleet** — a registry tracks every agent that's ever connected, online/offline/busy status, and per-device capabilities.
