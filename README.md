@@ -113,4 +113,4 @@ Standard flow: fork, branch, PR. If you're touching `core/relay.py` or `core/ses
 
 ## License
 
-### Any product or software which was build or designed from part or all the code base of NEXUS should reference it's creator DAUDET IKEORAH ELAD ANEDO
+### Any product or software which was build or designed from part or all the code base of NEXUS should reference it's creator Eng. DAUDET IKEORAH ELAD ANEDO
