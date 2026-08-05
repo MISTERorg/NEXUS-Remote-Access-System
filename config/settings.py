@@ -49,6 +49,26 @@ class RelaySettings(BaseSettings):
     heartbeat_interval: int = 30
     session_timeout: int = 3600
     max_payload_bytes: int = 10 * 1024 * 1024
+    plain_tunnel_port: int = 0
+    # ↑ 0 = disabled (default). When set, RelayServer.start() binds a SECOND,
+    # loopback-only (127.0.0.1), NON-TLS listener on this port, used
+    # exclusively as the target of a reverse tunnel like pinggy.io's default
+    # HTTP-tunnel mode — which terminates TLS itself and forwards plaintext
+    # to whatever it's pointed at. Pointing a TLS-terminating tunnel at the
+    # relay's normal TLS listener double-wraps the handshake and breaks the
+    # connection; this gives the tunnel a plaintext target to forward to
+    # instead, without touching the existing 0.0.0.0 TLS listener used by
+    # direct LAN/WAN connections. See setup_and_launch.py's
+    # auto_start_public_tunnel() for the client side of this.
+    punch_port: int = 0
+    # ↑ 0 = reuse `port`'s number for UDP too (TCP and UDP port namespaces
+    # are independent, so this never collides with the main TLS listener).
+    # RelayServer.start() binds a UDP socket here for transport/hole_punch.py's
+    # PunchRendezvousServer — a minimal STUN-lite reflector agents use to
+    # learn their own observed public UDP endpoint (Phase 1 of P2P). See
+    # transport/hole_punch.py's module docstring for the full picture,
+    # including why this only benefits Python-side agents today, not the
+    # browser controller.
 
 
 class AuthSettings(BaseSettings):

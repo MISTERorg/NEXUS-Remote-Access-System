@@ -508,7 +508,7 @@ def check_relay_reachable(relay_url: str) -> None:
         warn("Could not parse relay URL — will attempt connection anyway")
         return
 
-    info(f"Pinging {host}:{port}...")
+    info(f"Testing TCP connection to {host}:{port} (this is a real socket connect, not ICMP ping)...")
     for attempt in range(1, 6):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -525,8 +525,16 @@ def check_relay_reachable(relay_url: str) -> None:
     err(f"Cannot reach {host}:{port} after 5 attempts.")
     err("Possible causes:")
     err("  • The controller's setup_and_launch.py is not running")
-    err("  • A firewall is blocking port 7000")
+    err("  • A firewall is blocking this port")
     err(f"  • The Relay URL may be wrong: {relay_url}")
+    if "pinggy" not in host and ".pinggy." not in relay_url:
+        err("  • If this is a direct WAN IP (not a tunnel URL), the controller's ISP")
+        err("    may use carrier-grade NAT — no port forwarding can fix that. Ask them")
+        err("    to use the tunnel URL from their SEND_TO_REMOTE_PC.txt instead, or")
+        err("    re-run setup_and_launch.py on their end to generate a fresh one.")
+    err("Note: a failed `ping` command (ICMP) does NOT mean the same thing as this")
+    err("test failing — many networks block ICMP while still allowing this real")
+    err("connection through. Trust this result, not a separate ping test.")
     err("Ask the controller to confirm their relay is running, then try again.")
     input("\nPress Enter to exit...")
     sys.exit(1)

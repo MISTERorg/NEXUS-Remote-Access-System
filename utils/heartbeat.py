@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Callable, Coroutine, Dict, Optional
+
 from utils.logger import get_logger
 
 log = get_logger("nexus.heartbeat")
@@ -58,47 +59,3 @@ class HeartbeatManager:
                 self.unregister(pid)
                 if self.on_dead:
                     await self.on_dead(pid)
-
-
-# ---------------------------------------------------------------------------
-# utils/ratelimit.py  (included here as a second class for compactness)
-# ---------------------------------------------------------------------------
-
-"""
-utils/ratelimit.py
-------------------
-In-memory token-bucket rate limiter. Thread/async-safe.
-"""
-
-from collections import defaultdict
-
-
-class RateLimiter:
-    """
-    Token-bucket rate limiter keyed by an arbitrary string (IP, user ID, etc.).
-
-    Args:
-        max_calls: Maximum calls allowed in the window.
-        window_seconds: Rolling window in seconds.
-    """
-
-    def __init__(self, max_calls: int = 100, window_seconds: float = 60.0):
-        self.max_calls = max_calls
-        self.window = window_seconds
-        # { key: [timestamp, ...] }
-        self._buckets: Dict[str, list] = defaultdict(list)
-
-    def is_allowed(self, key: str) -> bool:
-        now = time.monotonic()
-        cutoff = now - self.window
-        bucket = self._buckets[key]
-        # Evict expired timestamps
-        while bucket and bucket[0] < cutoff:
-            bucket.pop(0)
-        if len(bucket) < self.max_calls:
-            bucket.append(now)
-            return True
-        return False
-
-    def reset(self, key: str) -> None:
-        self._buckets.pop(key, None)

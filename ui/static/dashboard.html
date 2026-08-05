@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NEXUS · Remote Control Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+
+<!-- =====================================================================
+     LOGIN SCREEN
+     ===================================================================== -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-brand"><span class="mark"></span><h1>NEXUS</h1></div>
+    <div class="login-sub">ENTERPRISE REMOTE ACCESS &amp; CONTROLLER</div>
+    <div class="field"><label>Dashboard REST API Endpoint</label><input id="api-base" type="text" value="http://localhost:8080" /></div>
+    <div class="field"><label>Relay WebSocket Endpoint</label><input id="relay-ws-url" type="text" value="ws://localhost:7000" /></div>
+    <div class="field"><label>Operator Username</label><input id="login-user" type="text" placeholder="admin" autocomplete="username" /></div>
+    <div class="field"><label>Password</label><input id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" /></div>
+    <div class="field"><label>TOTP Code (if enabled)</label><input id="login-totp" type="text" placeholder="000000" maxlength="6" /></div>
+    <button id="login-btn" onclick="Auth.doLogin()">Authenticate Session</button>
+    <div class="login-error" id="login-error"></div>
+    <!-- Shown automatically when wss:// cert is not trusted by the browser -->
+    <div class="cert-helper" id="cert-helper">
+      <strong>&#128274; Browser blocked the relay connection</strong>
+      The relay uses a self-signed TLS certificate your browser hasn't trusted yet.
+      This is the only reason the WebSocket can't authenticate.
+      <ol>
+        <li>Click <a id="cert-trust-link" href="#" target="_blank" rel="noopener">Open relay in new tab &#x2197;</a></li>
+        <li>Click <em>Advanced</em> &rarr; <em>Proceed</em> (or "Accept the risk")</li>
+        <li>Close that tab, then click <strong>Authenticate Session</strong> again</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<!-- =====================================================================
+     APP SHELL
+     ===================================================================== -->
+<div id="app">
+  <div id="sidebar">
+    <div class="brand"><span class="mark"></span><span>NEXUS</span></div>
+    <nav>
+      <div class="nav-item active" data-view="overview"  onclick="Views.show('overview')"><span class="icon">🖥️</span>Overview</div>
+      <div class="nav-item"        data-view="devices"   onclick="Views.show('devices')"><span class="icon">💻</span>Devices<span class="nav-count" id="nav-devices-count">0</span></div>
+      <div class="nav-item"        data-view="desktop"   onclick="Views.show('desktop')"><span class="icon">📺</span>Remote Desktop</div>
+      <div class="nav-item"        data-view="files"     onclick="Views.show('files')"><span class="icon">📁</span>File Manager</div>
+      <div class="nav-item"        data-view="sessions"  onclick="Views.show('sessions')"><span class="icon">🔗</span>Sessions<span class="nav-count" id="nav-sessions-count">0</span></div>
+      <div class="nav-item"        data-view="terminal"  onclick="Views.show('terminal')"><span class="icon">⚡</span>Shell Terminal</div>
+      <div class="nav-item"        data-view="av"        onclick="Views.show('av')"><span class="icon">📹</span>AV Control</div>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="conn-line"><span class="conn-pulse" id="conn-pulse"></span><span id="conn-label">disconnected</span></div>
+      <button id="logout-btn" onclick="Auth.doLogout()">Disconnect</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <!-- Session Tabs -->
+    <div id="session-tabs-bar">
+      <div class="tab-item active" id="tab-overview" onclick="Views.show('overview')"><span>Dashboard</span></div>
+    </div>
+
+    <!-- Topbar -->
+    <div id="topbar">
+      <h2 id="topbar-title">Control Center</h2>
+      <div class="stat-chip"><span class="v on" id="stat-online">0</span><span class="l">Online</span></div>
+      <div class="stat-chip"><span class="v" id="stat-total">0</span><span class="l">Devices</span></div>
+      <div class="stat-chip"><span class="v" id="stat-sessions">0</span><span class="l">Sessions</span></div>
+      <div class="topbar-spacer"></div>
+      <button class="icon-btn" onclick="Poller.refresh()">⟳ Refresh</button>
+    </div>
+
+    <div id="view-container">
+
+      <!-- ── OVERVIEW ──────────────────────────────────────────────── -->
+      <div class="view active" id="view-overview">
+        <div class="quick-connect-hero">
+          <div class="hero-card">
+            <h4>Connect to Remote Computer</h4>
+            <p style="color:var(--text-dim);font-size:11.5px;margin-bottom:10px;">Enter a registered Device ID to launch a remote session.</p>
+            <div class="qc-input-group">
+              <input id="qc-device-id" placeholder="Device ID (e.g., DEV-1049)" onkeydown="if(event.key==='Enter') Sessions.quickConnect()" />
+              <button class="btn-connect" id="qc-connect-btn" onclick="Sessions.quickConnect()">Connect</button>
+            </div>
+            <div class="mode-selector">
+              <label><input type="radio" name="qc-mode" value="desktop" checked /> Remote Control</label>
+              <label><input type="radio" name="qc-mode" value="files" /> File Transfer</label>
+              <label><input type="radio" name="qc-mode" value="terminal" /> Shell</label>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h3 style="font-family:var(--head);font-size:18px;margin:0;">Registered Endpoints</h3>
+        </div>
+        <table class="dtable" id="overview-table">
+          <thead><tr><th>Device</th><th>Type</th><th>OS</th><th>IP</th><th>Capabilities</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- ── REMOTE DESKTOP ─────────────────────────────────────────── -->
+      <div class="view" id="view-desktop">
+        <div class="desktop-toolbar">
+          <div class="dt-group">
+            <span style="font-weight:bold;color:var(--cyan);font-size:12px;" id="dt-target-name">No Active Screen</span>
+            <span class="hud-badge" id="dt-fps-hud">-- FPS</span>
+            <span class="hud-badge" style="color:var(--cyan);background:rgba(0,229,255,0.1);" id="dt-latency-hud">-- ms</span>
+          </div>
+          <div class="dt-group">
+            <button class="dt-btn" id="btn-capture-toggle" onclick="RemoteDesktop.toggleInputCapture()" title="Toggle keyboard capture (Esc to release)">⌨ Capture Keys</button>
+          </div>
+          <div class="dt-group">
+            <button class="dt-btn" onclick="Clipboard.getRemote()" title="Pull remote clipboard → local">📋 Pull Clipboard</button>
+            <button class="dt-btn" onclick="Clipboard.pushPrompt()" title="Type text to push to remote clipboard">📋 Push Text…</button>
+          </div>
+          <div class="dt-group">
+            <button class="dt-btn" onclick="RemoteDesktop.toggleFullscreen()">⛶ Fullscreen</button>
+            <button class="dt-btn" style="color:var(--red);" onclick="Sessions.disconnectActive()">✕ End Stream</button>
+          </div>
+        </div>
+        <div class="canvas-container" id="canvas-container">
+          <canvas id="remote-canvas" width="1280" height="720" tabindex="0"></canvas>
+          <div class="canvas-empty-state" id="canvas-empty-state">Waiting for first frame…</div>
+          <!-- NEW: Hint shown when stream is active but keyboard is not captured -->
+          <div id="canvas-kb-hint">Click canvas to capture keyboard input · Esc to release</div>
+          <div id="input-capture-badge">⌨ KEYS CAPTURED · Esc to release</div>
+        </div>
+      </div>
+
+      <!-- ── FILE MANAGER ───────────────────────────────────────────── -->
+      <div class="view" id="view-files">
+        <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;">
+          <span style="font-size:12px;color:var(--text-dim);">Active Target:</span>
+          <select id="files-session-select" style="background:var(--bg-raised);border:1px solid var(--line);color:var(--text);padding:6px;border-radius:3px;" onchange="FileMgr.onSessionChange()">
+            <option value="">Select Target Session...</option>
+          </select>
+          <button class="icon-btn" onclick="FileMgr.loadRemote()">↻ Refresh</button>
+        </div>
+        <div class="dual-pane-grid">
+          <div class="pane-card">
+            <div class="pane-head"><span>Local Staging</span><button class="icon-btn" onclick="document.getElementById('local-file-input').click()">+ Add Files</button></div>
+            <div class="pane-path" id="local-path">Files staged from your browser</div>
+            <div class="pane-body" id="local-file-list"><div class="empty-note">No files staged. Click "Add Files" to select files.</div></div>
+            <input type="file" id="local-file-input" multiple onchange="FileMgr.onLocalFilesPicked(event)" />
+          </div>
+          <div class="pane-actions">
+            <button class="btn-transfer" onclick="FileMgr.transfer('upload')" title="Upload staged files to remote">➔</button>
+            <button class="btn-transfer" onclick="FileMgr.transfer('download')" title="Download selected remote file">⬅</button>
+          </div>
+          <div class="pane-card">
+            <div class="pane-head"><span>Remote Endpoint</span></div>
+            <div class="pane-path" id="remote-path">—</div>
+            <div class="pane-body" id="remote-file-list"><div class="empty-note">Select a session and refresh to browse.</div></div>
+            <div class="progress-bar" id="transfer-progress"><div class="fill" id="transfer-progress-fill"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── DEVICES ────────────────────────────────────────────────── -->
+      <div class="view" id="view-devices">
+        <table class="dtable" id="devices-table">
+          <thead><tr><th>Device ID</th><th>Name</th><th>Type</th><th>OS</th><th>IP</th><th>Capabilities</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- ── SESSIONS ───────────────────────────────────────────────── -->
+      <div class="view" id="view-sessions">
+        <div id="sessions-list"></div>
+      </div>
+
+      <!-- ── TERMINAL ───────────────────────────────────────────────── -->
+      <div class="view" id="view-terminal">
+        <div class="term-layout">
+
+          <!-- Toolbar: multi-target selector + maintenance toggle -->
+          <div class="term-toolbar">
+            <span class="term-toolbar-label">Send to:</span>
+
+            <!-- Multi-target dropdown (replaces single <select>) -->
+            <div class="ttp-wrapper" id="ttp-wrapper">
+              <div class="ttp-summary" id="ttp-summary" onclick="Terminal.toggleTargetPanel()">
+                <span id="term-mode-badge" class="term-mode-badge">SINGLE</span>
+                <span id="ttp-display-text" style="margin-left:4px;">Active Session</span>
+                <span class="ttp-caret" id="ttp-caret">▾</span>
+              </div>
+              <div class="ttp-dropdown" id="ttp-dropdown">
+                <label class="ttp-item ttp-item-all">
+                  <input type="checkbox" id="ttp-check-all" onchange="Terminal.onAllTargetChange(this)">
+                  <span>📡 All Sessions (Broadcast)</span>
+                </label>
+                <div id="ttp-session-list">
+                  <div class="ttp-empty">No sessions — connect to a device first.</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- NEW: Maintenance mode toggle -->
+            <button class="btn-maint" id="btn-maint-toggle" onclick="Terminal.toggleMaintMode()" title="Prefix commands with # [NEXUS-MAINT] for shell-log tracing">⚙ Maint Mode</button>
+
+            <div style="flex:1"></div>
+            <button class="icon-btn" onclick="Terminal.clear()" style="font-size:10.5px;">Clear</button>
+            <button class="icon-btn" onclick="Terminal.openShell()" style="font-size:10.5px;" id="btn-attach-shell">Attach Shell</button>
+          </div>
+
+          <!-- On-screen special key keyboard -->
+          <div class="soft-keyboard">
+            <div class="soft-keyboard-row">
+              <span style="font-size:9px;color:var(--text-faint);align-self:center;margin-right:4px;">KEYS</span>
+              <button class="sk-key" onclick="Terminal.sendKey('escape')">Esc</button>
+              <div class="sk-separator"></div>
+              <button class="sk-key" onclick="Terminal.sendKey('f1')">F1</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f2')">F2</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f3')">F3</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f4')">F4</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f5')">F5</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f6')">F6</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f7')">F7</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f8')">F8</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f9')">F9</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f10')">F10</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f11')">F11</button>
+              <button class="sk-key" onclick="Terminal.sendKey('f12')">F12</button>
+            </div>
+            <div class="soft-keyboard-row">
+              <span style="font-size:9px;color:var(--text-faint);align-self:center;margin-right:4px;">NAV</span>
+              <button class="sk-key" onclick="Terminal.sendKey('tab')">Tab</button>
+              <button class="sk-key" onclick="Terminal.sendKey('home')">Home</button>
+              <button class="sk-key" onclick="Terminal.sendKey('end')">End</button>
+              <button class="sk-key" onclick="Terminal.sendKey('page_up')">PgUp</button>
+              <button class="sk-key" onclick="Terminal.sendKey('page_down')">PgDn</button>
+              <button class="sk-key" onclick="Terminal.sendKey('insert')">Ins</button>
+              <button class="sk-key" onclick="Terminal.sendKey('delete')">Del</button>
+              <div class="sk-separator"></div>
+              <button class="sk-key" onclick="Terminal.sendKey('up')">↑</button>
+              <button class="sk-key" onclick="Terminal.sendKey('down')">↓</button>
+              <button class="sk-key" onclick="Terminal.sendKey('left')">←</button>
+              <button class="sk-key" onclick="Terminal.sendKey('right')">→</button>
+            </div>
+            <div class="soft-keyboard-row">
+              <span style="font-size:9px;color:var(--text-faint);align-self:center;margin-right:4px;">SHELL</span>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','c')" title="Interrupt process (^C)">^C</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','d')" title="EOF / logout (^D)">^D</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','z')" title="Suspend process (^Z)">^Z</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','l')" title="Clear screen (^L)">^L</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','r')" title="Reverse history (^R)">^R</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','a')" title="Go to start of line (^A)">^A</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','e')" title="Go to end of line (^E)">^E</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','u')" title="Delete to start of line (^U)">^U</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','w')" title="Delete word back (^W)">^W</button>
+              <div class="sk-separator"></div>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('ctrl','k')" title="Kill to end of line (^K)">^K</button>
+              <button class="sk-key shell-shortcut" onclick="Terminal.sendCombo('alt','.')"  title="Insert last argument (Alt+.)">Alt+.</button>
+            </div>
+          </div>
+
+          <!-- Output -->
+          <div id="term-output"></div>
+
+          <!-- Input row -->
+          <div class="term-input-row">
+            <span class="term-prompt" id="term-prompt-glyph">❯</span>
+            <input id="term-input"
+              placeholder='Command… "##" broadcasts to all, "!>" marks as maintenance'
+              onkeydown="Terminal.onInputKeydown(event)"
+              oninput="Terminal.onInputChange(event)"
+              disabled />
+            <button class="term-send-btn" id="term-send-btn" onclick="Terminal.send()" disabled>Send</button>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- ── AV CONTROL ─────────────────────────────────────────────────── -->
+      <div class="view" id="view-av">
+        <div class="av-grid">
+
+          <!-- Camera card -->
+          <div class="av-card">
+            <div class="av-card-head">
+              <h4>📹 Camera Feed</h4>
+              <span class="av-fps-badge" id="cam-fps">-- FPS</span>
+              <div style="flex:1"></div>
+              <select id="cam-device" style="background:var(--bg);border:1px solid var(--line);color:var(--text);padding:4px 8px;border-radius:var(--radius);font-size:11px;font-family:var(--mono);">
+                <option value="0">Detecting cameras…</option>
+              </select>
+              <button class="av-btn" id="btn-cam-refresh" onclick="AVControl.refreshCameraList()" title="Re-scan for connected cameras" style="padding:4px 8px;">⟳</button>
+            </div>
+            <div class="av-card-body">
+              <div class="cam-container" id="cam-container">
+                <canvas id="cam-canvas"></canvas>
+                <div class="cam-empty" id="cam-empty">Camera stream inactive<br><span style="font-size:10px;color:var(--text-faint);">Press Start to begin</span></div>
+              </div>
+              <div class="av-toolbar">
+                <button class="av-btn" id="btn-cam-start" onclick="AVControl.cameraStart()">▶ Start Camera</button>
+                <button class="av-btn" id="btn-cam-stop"  onclick="AVControl.cameraStop()"  disabled>■ Stop Camera</button>
+                <button class="av-btn" id="btn-cam-snapshot" onclick="AVControl.cameraSnapshot()" title="Save a full-quality photo">📷 Snapshot</button>
+                <button class="av-btn" id="btn-cam-record" onclick="AVControl.toggleCameraRecording()" title="Record the live feed to a video file">⏺ Record</button>
+                <span id="cam-status" style="font-size:10.5px;color:var(--text-faint);margin-left:auto;">Inactive</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Audio card -->
+          <div class="av-card">
+            <div class="av-card-head">
+              <h4>🎙 Audio Channel</h4>
+              <div style="flex:1"></div>
+              <span id="audio-status-badge" style="font-size:10px;font-family:var(--mono);color:var(--text-faint);">IDLE</span>
+            </div>
+            <div class="av-card-body">
+
+              <!-- Listen: agent mic → my speaker -->
+              <div class="audio-row">
+                <div class="audio-row-head">
+                  <span>🔊 Listen — Agent Mic → My Speaker</span>
+                  <button class="av-btn" id="btn-listen-toggle" onclick="AVControl.toggleListen()">▶ Start Listening</button>
+                </div>
+                <div class="audio-label">Incoming level</div>
+                <div class="vu-wrap">
+                  <div class="vu-bar"><div class="vu-fill" id="vu-listen"></div></div>
+                  <span class="vu-pct" id="vu-listen-pct">0%</span>
+                </div>
+              </div>
+
+              <!-- Speak: my mic → agent speaker -->
+              <div class="audio-row">
+                <div class="audio-row-head">
+                  <span>🎤 Speak — My Mic → Agent Speaker</span>
+                  <button class="av-btn" id="btn-speak-toggle" onclick="AVControl.toggleSpeak()">▶ Start Speaking</button>
+                </div>
+                <div class="audio-label">Outgoing level</div>
+                <div class="vu-wrap">
+                  <div class="vu-bar"><div class="vu-fill" id="vu-speak"></div></div>
+                  <span class="vu-pct" id="vu-speak-pct">0%</span>
+                </div>
+                <div class="ptt-hint" id="ptt-hint" style="display:none;">
+                  💡 Hold <kbd style="background:var(--bg-raised-2);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:10px;">Space</kbd> for push-to-talk while this view is active
+                </div>
+              </div>
+
+              <!-- Quick: both directions -->
+              <div class="av-toolbar" style="border-top:1px solid var(--line-soft);padding-top:10px;">
+                <button class="av-btn" onclick="AVControl.startBoth()" style="flex:1;justify-content:center;">⚡ Start Both</button>
+                <button class="av-btn on red" onclick="AVControl.stopAll()" style="flex:1;justify-content:center;">✕ Stop All</button>
+              </div>
+
+            </div>
+          </div>
+
+        </div><!-- /av-grid -->
+      </div><!-- /view-av -->
+
+    </div><!-- /view-container -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- DRAWER -->
+<div id="drawer-overlay" onclick="Drawer.close()"></div>
+<div id="drawer">
+  <h3 id="drawer-title" style="font-family:var(--head);font-size:22px;margin:0 0 4px;">Device Details</h3>
+  <div id="drawer-id" style="font-family:var(--mono);color:var(--text-faint);font-size:11px;margin-bottom:20px;">—</div>
+  <div id="drawer-content"></div>
+</div>
+
+<!-- TOAST -->
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script src="/static/js/state.js"></script>
+<script src="/static/js/utils.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/auth.js"></script>
+<script src="/static/js/views.js"></script>
+<script src="/static/js/relay.js"></script>
+<script src="/static/js/sessions.js"></script>
+<script src="/static/js/remote_desktop.js"></script>
+<script src="/static/js/clipboard.js"></script>
+<script src="/static/js/terminal.js"></script>
+<script src="/static/js/file_manager.js"></script>
+<script src="/static/js/devices.js"></script>
+<script src="/static/js/poller.js"></script>
+<script src="/static/js/av_control.js"></script>
+<script src="/static/js/boot.js"></script>
+</body>
+</html>

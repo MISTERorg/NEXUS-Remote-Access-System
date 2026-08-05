@@ -28,6 +28,17 @@ Endpoints:
   GET    /sessions              — list active sessions (read-only)
   GET    /health                — health check
   GET    /console                — serve dashboard.html
+  GET    /static/*               — serve dashboard.css + the per-feature
+                                    dashboard JS modules (ui/static/js/*.js)
+
+Static assets (ui/static/) are one feature-module-per-file (state, api,
+auth, views, relay, sessions, remote_desktop, clipboard, terminal,
+file_manager, devices, poller, av_control — loaded in that dependency
+order by dashboard.html, plus boot.js last). They're plain classic
+<script> files sharing one global scope on purpose, matching how
+dashboard.html's inline onclick="Module.method()" handlers already
+call them — splitting them into ES modules would require rewriting
+every onclick handler in the HTML for no functional benefit here.
 
 Start with:
     uvicorn ui.dashboard:app --host 0.0.0.0 --port 8080 --reload
@@ -43,6 +54,7 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config.settings import settings
@@ -88,38 +100,53 @@ def _get_bundle_dir() -> Path:
 _BUNDLE_DIR = _get_bundle_dir()
 _MODULE_DIR = Path(__file__).resolve().parent
 
-_CONSOLE_CANDIDATES = [
+# Every candidate is a "ui/static" directory (or its frozen-build
+# equivalent) — dashboard.html, dashboard.css, and js/*.js all live
+# together under whichever one of these actually exists, so one lookup
+# finds the whole asset set instead of three independent ones.
+_STATIC_DIR_CANDIDATES = [
     # PyInstaller / frozen executable paths
-    _BUNDLE_DIR / "ui" / "dashboard.html",
-    _BUNDLE_DIR / "dashboard.html",
-    Path(sys.executable).parent / "ui" / "dashboard.html",
-    Path(sys.executable).parent / "dashboard.html",
+    _BUNDLE_DIR / "ui" / "static",
+    _BUNDLE_DIR / "static",
+    Path(sys.executable).parent / "ui" / "static",
+    Path(sys.executable).parent / "static",
     # Local dev / source paths
-    _MODULE_DIR / "dashboard.html",
-    _MODULE_DIR / "console.html",
-    _MODULE_DIR.parent / "dashboard.html",
+    _MODULE_DIR / "static",
+    _MODULE_DIR.parent / "static",
 ]
 
 
-def _find_console_html() -> Optional[Path]:
-    for candidate in _CONSOLE_CANDIDATES:
-        if candidate.exists():
+def _find_static_dir() -> Optional[Path]:
+    for candidate in _STATIC_DIR_CANDIDATES:
+        if (candidate / "dashboard.html").exists():
             return candidate
     return None
 
 
+_STATIC_DIR = _find_static_dir()
+
+if _STATIC_DIR:
+    # Serves dashboard.css and js/*.js (one file per dashboard feature
+    # module — see ui/static/js/) at /static/...
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+else:
+    log.warning(
+        "dashboard.static_dir_not_found",
+        checked=[str(p) for p in _STATIC_DIR_CANDIDATES],
+    )
+
+
 @app.get("/console", include_in_schema=False)
 async def console():
-    path = _find_console_html()
-    if not path:
+    if not _STATIC_DIR:
         raise HTTPException(
             status_code=404,
             detail=(
-                "dashboard.html not found. Checked: "
-                + ", ".join(str(p) for p in _CONSOLE_CANDIDATES)
+                "ui/static (dashboard.html) not found. Checked: "
+                + ", ".join(str(p) for p in _STATIC_DIR_CANDIDATES)
             ),
         )
-    return FileResponse(path, media_type="text/html")
+    return FileResponse(_STATIC_DIR / "dashboard.html", media_type="text/html")
 
 
 def get_token(creds: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> str:

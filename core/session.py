@@ -73,6 +73,51 @@ class MessageType(str, Enum):
     # Clipboard
     CLIPBOARD_GET = "clipboard_get"
     CLIPBOARD_SET = "clipboard_set"
+    # Camera
+    CAMERA_START = "camera_start"
+    CAMERA_STOP  = "camera_stop"
+    CAMERA_FRAME = "camera_frame"
+    CAMERA_LIST  = "camera_list"      # controller→agent: request list; agent→controller: response
+    CAMERA_SNAPSHOT = "camera_snapshot"   # controller→agent: request one full-quality frame;
+                                           # agent→controller: response carrying it
+    CAMERA_AI_RESULT = "camera_ai_result" # agent→controller: detection/analysis metadata from
+                                           # a registered AI frame processor (see agents/camera.py).
+                                           # Sent as its own message rather than baked into the
+                                           # frame image, so the browser can render overlays
+                                           # without re-decoding a heavier annotated JPEG.
+    # Audio (bidirectional)
+    AUDIO_START = "audio_start"
+    AUDIO_STOP  = "audio_stop"
+    AUDIO_DATA  = "audio_data"
+    # AV error feedback (agent → controller)
+    AV_ERROR = "av_error"
+    # Network quality (agent → controller → agent) — RTT measurement that
+    # feeds adaptive stream quality (see agents/adaptive_quality.py). Not
+    # gated by perm_map for the ack: it carries no actionable payload, so
+    # any active session participant (including VIEWER role) can reply.
+    NET_PROBE = "net_probe"           # agent → controller: {nonce, sent_at}
+    NET_PROBE_ACK = "net_probe_ack"   # controller → agent: {nonce} echoed back
+    # P2P endpoint exchange (Phase 1) — relay reports each side's observed
+    # public UDP endpoint (STUN-lite, see transport/hole_punch.py) so both
+    # sides can attempt a direct hole-punch (Phase 2) instead of riding the
+    # relay for high-bandwidth traffic. This is signaling only — it never
+    # replaces the relay path, which remains fully functional regardless
+    # of whether a P2P attempt succeeds, is attempted, or is even supported
+    # by the peer.
+    #
+    # Bidirectional and transparently relayed, like every other message
+    # type here: whoever sends P2P_ENDPOINT_OFFER has it forwarded verbatim
+    # to the other session participant, who receives that same message
+    # type meaning "here is my peer's offered endpoint." No separate
+    # request/response type needed — matches how the rest of this protocol
+    # already works, rather than adding special-case routing in session.py.
+    #
+    # Today, only Python-side agents can act on this — the browser
+    # controller cannot open raw UDP sockets, so real browser P2P
+    # participation needs WebRTC instead, and is not implemented here. See
+    # README.md's P2P section for why.
+    P2P_ENDPOINT_OFFER = "p2p_endpoint_offer"
+    P2P_STATUS = "p2p_status"   # optional, informational only: "punch succeeded/failed"
     # Metrics
     METRICS_UPDATE = "metrics_update"
     # Error
@@ -122,6 +167,7 @@ class Session:
         # Crypto
         self._ecdh = ECDHKeyExchange()
         self._cipher: Optional[AESGCMCipher] = None
+        self.shared_key: Optional[bytes] = None
 
         # Message routing
         self._controller_send: Optional[Callable] = None
@@ -176,10 +222,26 @@ class Session:
             info=f"nexus-session-{self.session_id}".encode(),
         )
         self._cipher = AESGCMCipher(shared_key)
+        self.shared_key = shared_key  # kept for punch_token() below — same
+                                       # secret already trusted for message
+                                       # encryption, reused rather than
+                                       # inventing a second secret to manage
         self.state = SessionState.ACTIVE
         self.activated_at = time.time()
         log.info("session.activated", session_id=self.session_id, device_id=self.device_id)
         audit.session_opened(self.session_id, self.controller_id, self.device_id)
+
+    def punch_token(self) -> Optional[str]:
+        """
+        Token for transport/hole_punch.py's PunchRendezvousServer — proves
+        to the relay's UDP reflector that whoever is asking is a genuine
+        participant in this specific active session, without needing a
+        second independent secret. None before the handshake completes.
+        """
+        if not self.shared_key:
+            return None
+        from transport.hole_punch import make_probe_token
+        return make_probe_token(self.shared_key, self.session_id)
 
     # ------------------------------------------------------------------
     # Message routing
@@ -230,9 +292,25 @@ class Session:
             MessageType.TERMINAL_DATA: "terminal.open",
             MessageType.FILE_LIST: "file.download",
             MessageType.FILE_UPLOAD_START: "file.upload",
+            MessageType.FILE_UPLOAD_CHUNK: "file.upload",
+            MessageType.FILE_UPLOAD_END:   "file.upload",
             MessageType.FILE_DOWNLOAD_START: "file.download",
             MessageType.CLIPBOARD_GET: "clipboard",
             MessageType.CLIPBOARD_SET: "clipboard",
+            # Camera — viewer can start/stop; no "control" needed
+            MessageType.CAMERA_START: "screen.view",
+            MessageType.CAMERA_STOP:  "screen.view",
+            MessageType.CAMERA_LIST:  "screen.view",   # request camera enumeration
+            MessageType.CAMERA_SNAPSHOT: "screen.view",
+            # Diagnostic/infra messages — no meaningful side effect, so
+            # available to any active participant including VIEWER.
+            MessageType.NET_PROBE_ACK: "session.open",
+            MessageType.P2P_ENDPOINT_OFFER: "session.open",
+            MessageType.P2P_STATUS: "session.open",
+            # Audio — operator-level (can speak/listen)
+            MessageType.AUDIO_START:  "screen.view",
+            MessageType.AUDIO_STOP:   "screen.view",
+            MessageType.AUDIO_DATA:   "screen.control",
         }
         required = perm_map.get(msg.type)
         if required and not has_permission(self.controller_role, required):

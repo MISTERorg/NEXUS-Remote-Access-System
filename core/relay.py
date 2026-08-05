@@ -43,7 +43,8 @@ from core.registry import (
 )
 from core.session import SessionState, session_manager
 from transport.websocket_transport import WSServer
-from utils.heartbeat import HeartbeatManager, RateLimiter
+from utils.heartbeat import HeartbeatManager
+from utils.ratelimit import RateLimiter
 from utils.logger import get_logger
 
 log = get_logger("nexus.relay")
@@ -66,6 +67,13 @@ _CONTROLLER_SESSION_MSG_TYPES = frozenset({
     "file_upload_end",
     "clipboard_get",
     "clipboard_set",
+    # AV
+    "camera_start",
+    "camera_stop",
+    "camera_list",   # controller requests camera enumeration from agent
+    "audio_start",
+    "audio_stop",
+    "audio_data",
 })
 
 
@@ -162,6 +170,11 @@ class RelayServer:
             on_dead=self._on_peer_dead,
         )
 
+        # P2P Phase 1 — see start()'s rendezvous setup and
+        # transport/hole_punch.py. token -> session_id.
+        self._punch_tokens: Dict[str, str] = {}
+        self._punch_rendezvous = None
+
         # Centralized close notification: fires for EVERY session_manager.close()
         # call, regardless of origin (this relay's own WS handler, an idle sweep,
         # an agent disconnect, or the dashboard's REST DELETE /sessions/{id}
@@ -195,6 +208,42 @@ class RelayServer:
         )
         await server.start()
         log.info("relay.started")
+
+        if settings.relay.plain_tunnel_port:
+            # Same handler, no TLS, bound to loopback only — see the
+            # plain_tunnel_port docstring in config/settings.py for why
+            # this exists. Never exposed beyond this host at the OS level:
+            # there is no socket listening on the public NIC for this one.
+            tunnel_server = WSServer(
+                host="127.0.0.1",
+                port=settings.relay.plain_tunnel_port,
+                handler=self._handle_connection,
+                ssl_context=None,
+                max_size=settings.relay.max_payload_bytes,
+                ping_interval=None,
+            )
+            await tunnel_server.start()
+            log.info("relay.plain_tunnel_listener_started", port=settings.relay.plain_tunnel_port)
+
+        # P2P Phase 1: STUN-lite UDP rendezvous, so agents can discover
+        # their own observed public endpoint. See transport/hole_punch.py's
+        # module docstring for what this does and doesn't enable today.
+        #
+        # token_validator must be synchronous (it's called from an
+        # asyncio.DatagramProtocol callback, which can't await) — so
+        # rather than querying session_manager on every UDP probe, we
+        # maintain self._punch_tokens ourselves, kept in sync at exactly
+        # the two points a session's token becomes valid or invalid:
+        # _handle_session_accept (handshake completes) and
+        # _notify_session_closed (session ends) below.
+        from transport.hole_punch import PunchRendezvousServer
+
+        self._punch_rendezvous = PunchRendezvousServer(
+            host=settings.relay.host,
+            port=settings.relay.punch_port or settings.relay.port,
+            token_validator=lambda token: token in self._punch_tokens,
+        )
+        await self._punch_rendezvous.start()
 
     # ------------------------------------------------------------------
     # Connection handler
@@ -442,6 +491,10 @@ class RelayServer:
             await session_manager.close(session_id, reason="handshake_failed")
             return
 
+        token = session.punch_token()
+        if token:
+            self._punch_tokens[token] = session_id
+
         ctrl_conn_id = self._controller_conns.get(session.controller_id)
         if ctrl_conn_id and ctrl_conn_id in self._connections:
             await self._connections[ctrl_conn_id].send_json({
@@ -551,6 +604,10 @@ class RelayServer:
         # place and must not decrement someone else's active session.
         if session.activated_at is not None and self._stats.active_sessions > 0:
             self._stats.active_sessions -= 1
+
+        token = session.punch_token()
+        if token:
+            self._punch_tokens.pop(token, None)
 
     async def _route_binary(self, conn: Connection, data: bytes) -> None:
         """Route an encrypted binary session frame to its destination."""

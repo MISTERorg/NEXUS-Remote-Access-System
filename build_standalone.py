@@ -1,4 +1,4 @@
-# build_standalone.py (final – recursive environment DLL collection)
+# build_standalone.py (final – recursive environment DLL collection + media stack)
 from __future__ import annotations
 
 import os
@@ -46,11 +46,12 @@ RUNTIME_PACKAGES = [
     "PyJWT", "bcrypt", "pydantic", "pydantic-settings", "httpx",
     "psutil", "mss", "Pillow", "pynput", "click", "rich",
     "aiofiles", "aiosqlite", "sqlalchemy", "structlog", "pyotp",
+    "opencv-python", "sounddevice", "numpy", "pyaudio",
 ]
 
 def ensure_runtime_packages() -> None:
     hdr("Installing Runtime Packages")
-    info("This ensures PyInstaller can bundle everything...")
+    info("This ensures PyInstaller can bundle everything (including media stack)...")
     subprocess.run(
         [sys.executable, "-m", "pip", "install", "--quiet"] + RUNTIME_PACKAGES,
         check=True
@@ -65,7 +66,7 @@ def ensure_runtime_packages() -> None:
 def get_all_env_binaries() -> list[tuple[str, str]]:
     """
     Collect ALL .dll and .pyd files from the entire Python environment.
-    This ensures that even deeply nested DLLs (like ffi.dll) are bundled.
+    This ensures that even deeply nested DLLs (OpenCV, PortAudio, OpenSSL) are bundled.
     """
     binaries = []
     seen = set()
@@ -84,33 +85,32 @@ def get_all_env_binaries() -> list[tuple[str, str]]:
         err("No native libraries found! The build will fail.")
     else:
         ok(f"Found {len(binaries)} native library files")
-        # Print a sample to confirm key files
         dll_count = sum(1 for p, _ in binaries if p.lower().endswith('.dll'))
         pyd_count = sum(1 for p, _ in binaries if p.lower().endswith('.pyd'))
-        dir(f"  DLLs: {dll_count}, PYD files: {pyd_count}")
+        info(f"  DLLs: {dll_count}, PYD files: {pyd_count}")
 
     return binaries
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 4. Runtime hook for DLL search path (still useful)
+# 4. Runtime hook for DLL search path (OpenSSL, PortAudio, OpenCV fix)
 # ════════════════════════════════════════════════════════════════════════════
 
 def write_runtime_hook() -> Path:
+    """
+    rth_openssl_fix.py is now a checked-in file at the project root (the
+    single source of truth for this DLL-search-path fix), not generated
+    here. This function used to write its content out from a hardcoded
+    string that was an exact duplicate of that file — two copies of the
+    same fix that could silently drift apart. It now just verifies the
+    real file is present and returns its path.
+    """
     hook_path = BASE_DIR / "rth_openssl_fix.py"
-    hook_content = '''import os
-import sys
-
-if sys.platform == "win32":
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass and os.path.exists(meipass):
-        try:
-            os.add_dll_directory(meipass)
-        except Exception:
-            pass
-        os.environ["PATH"] = meipass + os.pathsep + os.environ.get("PATH", "")
-'''
-    hook_path.write_text(hook_content, encoding="utf-8")
+    if not hook_path.exists():
+        raise FileNotFoundError(
+            f"{hook_path} not found. This file should be checked into the "
+            "project root — see README.md's 'Deployment tooling' section."
+        )
     return hook_path
 
 
@@ -144,6 +144,11 @@ def get_hidden_imports() -> list[str]:
         "psutil", "structlog", "click", "rich", "rich.console",
         "rich.table", "rich.panel", "rich.progress", "httpx", "aiofiles",
         "PIL", "PIL.Image", "PIL.JpegImagePlugin", "PIL.PngImagePlugin",
+        # New dependencies (OpenCV, sounddevice, numpy, pyaudio)
+        "cv2", "cv2.cv2", "numpy", "numpy.core", "numpy.core._methods",
+        "sounddevice", "_sounddevice", "_sounddevice_data",
+        "pyaudio", "_portaudio",
+        # Local modules
         "core.auth", "core.registry", "core.relay", "core.session",
         "agents.base_agent", "agents.desktop_agent", "agents.server_agent",
         "config.settings", "utils.crypto", "utils.logger", "utils.heartbeat",
@@ -156,18 +161,20 @@ def get_controller_collect_pkgs() -> list[str]:
         "uvicorn", "fastapi", "starlette", "pydantic", "pydantic_settings",
         "cryptography", "websockets", "rich", "click", "pynput", "mss",
         "PIL", "psutil", "structlog", "aiosqlite", "sqlalchemy", "bcrypt", "pyotp",
+        "cv2", "sounddevice", "numpy", "pyaudio",
     ]
 
 def get_agent_collect_pkgs() -> list[str]:
     return [
         "pydantic", "pydantic_settings", "cryptography", "websockets", "rich",
         "click", "pynput", "mss", "PIL", "psutil", "structlog",
+        "cv2", "sounddevice", "numpy", "pyaudio",
     ]
 
 def write_controller_spec() -> Path:
     hidden = get_hidden_imports()
     collect_pkgs = get_controller_collect_pkgs()
-    all_binaries = get_all_env_binaries()  # use the recursive collector
+    all_binaries = get_all_env_binaries()
 
     # Deduplicate
     uniq = {}
@@ -211,7 +218,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={{}},
     runtime_hooks=['{B}/rth_openssl_fix.py'],
-    excludes=['tkinter', 'matplotlib', 'numpy', 'pandas', 'scipy'],
+    excludes=['tkinter', 'matplotlib', 'pandas', 'scipy'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -280,7 +287,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={{}},
     runtime_hooks=['{B}/rth_openssl_fix.py'],
-    excludes=['tkinter', 'matplotlib', 'numpy', 'pandas', 'scipy',
+    excludes=['tkinter', 'matplotlib', 'pandas', 'scipy',
               'uvicorn', 'fastapi', 'starlette'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -431,7 +438,7 @@ def main() -> None:
 
     hdr("Writing Build Specs & Runtime Hooks")
     write_runtime_hook()
-    ok("rth_openssl_fix.py written")
+    ok("rth_openssl_fix.py found")
 
     write_agent_wrapper()
     ok("nexus_agent_entry.py written")

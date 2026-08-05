@@ -42,6 +42,8 @@ if _BASE not in sys.path:
     sys.path.insert(0, _BASE)
 
 from agents.base_agent import BaseAgent
+from agents.av_handler import AVHandlerMixin
+from agents.adaptive_quality import AdaptiveQualityController, apply_tier
 from core.registry import DeviceCapabilities, DeviceType
 from core.session import MessageType
 from config.settings import settings
@@ -75,7 +77,7 @@ if _HAS_PYNPUT:
     }
 
 
-class DesktopAgent(BaseAgent):
+class DesktopAgent(AVHandlerMixin, BaseAgent):
     """
     Full-capability desktop agent: screen share, remote input, terminal,
     file transfer, clipboard. All transport/auth/dispatch is inherited
@@ -93,6 +95,7 @@ class DesktopAgent(BaseAgent):
         jpeg_quality: int = 60,
         frame_scale: float = 1.0,
     ) -> None:
+        AVHandlerMixin._av_init(self)
         super().__init__(relay_url, device_id, device_name, agent_token)
         self.jpeg_quality = jpeg_quality
         self.frame_scale = frame_scale
@@ -100,6 +103,14 @@ class DesktopAgent(BaseAgent):
         self._sct: Optional[object] = None
         self._screen_task: Optional[asyncio.Task] = None
         self._terminals: Dict[str, asyncio.subprocess.Process] = {}
+
+        # Phase 3: adaptive quality — the configured jpeg_quality/frame_scale
+        # above are kept as-is and used as a BASELINE (see apply_tier() in
+        # agents/adaptive_quality.py); this controller scales them up/down
+        # from there based on measured RTT and whether the capture loop is
+        # keeping up, rather than replacing operator intent outright.
+        self._screen_quality = AdaptiveQualityController()
+        self._last_screen_probe_at: float = 0.0
 
         self._mouse: Optional[object] = None
         self._keyboard: Optional[object] = None
@@ -115,12 +126,15 @@ class DesktopAgent(BaseAgent):
         return DeviceType.DESKTOP
 
     def get_capabilities(self) -> DeviceCapabilities:
+        av = self.av_capabilities()
         return DeviceCapabilities(
             screen_share=_HAS_MSS and _HAS_PIL,
             remote_input=_HAS_PYNPUT,
             file_transfer=True,
             terminal=True,
             clipboard=self._has_display(),
+            audio=av["audio"],
+            camera=av["camera"],
             metrics=True,
         )
 
@@ -142,8 +156,23 @@ class DesktopAgent(BaseAgent):
         if _HAS_MSS and _HAS_PIL and self._screen_task is None:
             self._screen_task = asyncio.create_task(self._screen_push_loop())
 
+    async def on_net_probe_ack(self, payload: Dict[str, Any]) -> None:
+        """Routes an RTT measurement to whichever quality controller(s)
+        are waiting on this nonce — screen's own, and camera's (via
+        CameraMixin) if a camera stream happens to also be active.
+        Each controller ignores nonces it didn't issue, so this is safe
+        to call unconditionally."""
+        nonce = payload.get("nonce")
+        if not nonce:
+            return
+        self._screen_quality.record_probe_ack(nonce)
+        camera_quality = getattr(self, "_camera_quality", None)
+        if camera_quality is not None:
+            camera_quality.record_probe_ack(nonce)
+
     async def on_session_end(self) -> None:
         log.info("desktop_agent.session_ended", session_id=self._current_session_id)
+        await self._av_cleanup()
         if self._screen_task:
             self._screen_task.cancel()
             try:
@@ -183,20 +212,40 @@ class DesktopAgent(BaseAgent):
 
     async def _screen_push_loop(self) -> None:
         self._sct = mss.mss()
-        interval = 1.0 / self.SCREEN_PUSH_FPS
+        base_interval = 1.0 / self.SCREEN_PUSH_FPS
         loop = asyncio.get_running_loop()
+        PROBE_INTERVAL_S = 2.0
         try:
             while True:
                 t0 = loop.time()
+
+                # Periodic RTT probe — cheap (~50 bytes), feeds the tier
+                # decision below. Never awaited/blocking beyond the normal
+                # message send.
+                if t0 - self._last_screen_probe_at > PROBE_INTERVAL_S:
+                    nonce = self._screen_quality.new_probe_nonce()
+                    await self._send_session(MessageType.NET_PROBE, {"nonce": nonce})
+                    self._last_screen_probe_at = t0
+
+                quality, scale, fps_divisor = apply_tier(
+                    self.jpeg_quality, self.frame_scale, self._screen_quality.current_tier
+                )
+                interval = base_interval * fps_divisor
+
                 jpeg = await loop.run_in_executor(
-                    None, self._capture_jpeg_using_sct, self.jpeg_quality, self.frame_scale
+                    None, self._capture_jpeg_using_sct, quality, scale
                 )
                 if jpeg:
                     await self._send_session(
                         MessageType.SCREEN_FRAME,
                         {"frame": jpeg.hex(), "timestamp": time.time()},
                     )
-                await asyncio.sleep(max(0.0, interval - (loop.time() - t0)))
+
+                elapsed = loop.time() - t0
+                loop_lag_ratio = max(0.0, (elapsed - interval) / interval) if interval > 0 else 0.0
+                self._screen_quality.tick(loop_lag_ratio)
+
+                await asyncio.sleep(max(0.0, interval - elapsed))
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -272,7 +321,14 @@ class DesktopAgent(BaseAgent):
             key_str = str(payload.get("key", ""))
             key = _SPECIAL_KEYS.get(key_str.lower())
             if key is None:
-                key = key_str if len(key_str) == 1 else None
+                # Defensive: always use the lowercase base character.
+                # If the dashboard sends 'A' (uppercase) pynput would
+                # inject an implicit Shift on Linux/Wayland — double-
+                # modifier with the Shift already held from its own
+                # keydown event → garbled output. Lowercasing here
+                # ensures we always press the raw physical key; the OS
+                # produces the correct uppercase via the held modifier.
+                key = key_str.lower() if len(key_str) == 1 else None
             if key is None:
                 return
             if action == "press":

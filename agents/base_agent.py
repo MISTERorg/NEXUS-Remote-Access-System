@@ -77,6 +77,7 @@ class BaseAgent(ABC):
         self._running = False
         self._current_session_id: Optional[str] = None
         self._cipher: Optional[AESGCMCipher] = None
+        self._shared_key: Optional[bytes] = None
         self._ecdh: Optional[ECDHKeyExchange] = None
 
     # ------------------------------------------------------------------
@@ -106,6 +107,17 @@ class BaseAgent(ABC):
     async def on_file_upload(self, path: str, data: bytes) -> bool: return False
     async def on_clipboard_get(self) -> Optional[str]: return None
     async def on_clipboard_set(self, text: str) -> None: pass
+    # AV stubs
+    async def on_camera_start(self, payload: Dict[str, Any]) -> None: pass
+    async def on_camera_stop(self, payload: Dict[str, Any]) -> None: pass
+    async def on_camera_list(self, payload: Dict[str, Any]) -> None: pass
+    async def on_camera_snapshot(self, payload: Dict[str, Any]) -> None: pass
+    async def on_net_probe_ack(self, payload: Dict[str, Any]) -> None: pass
+    async def on_p2p_endpoint_offer(self, payload: Dict[str, Any]) -> None: pass
+    async def on_p2p_status(self, payload: Dict[str, Any]) -> None: pass
+    async def on_audio_start(self, payload: Dict[str, Any]) -> None: pass
+    async def on_audio_stop(self, payload: Dict[str, Any]) -> None: pass
+    async def on_audio_data(self, payload: Dict[str, Any]) -> None: pass
 
     # ------------------------------------------------------------------
     # Connection management
@@ -279,6 +291,8 @@ class BaseAgent(ABC):
                 info=f"nexus-session-{session_id}".encode(),
             )
             self._cipher = AESGCMCipher(shared_key)
+            self._shared_key = shared_key  # kept for the P2P punch token — see
+                                            # _p2p_phase1_discover() below
         except Exception as e:
             logging.error(f"[agent] ECDH failed: {e}")
             await self._ws.send(json.dumps({
@@ -298,6 +312,61 @@ class BaseAgent(ABC):
 
         # Fire lifecycle hook
         await self.on_session_start()
+
+        # P2P Phase 1 (best-effort, background, never blocking): discover
+        # our own public UDP endpoint via the relay's rendezvous listener
+        # and report it. Wrapped so ANY failure here — timeout, network
+        # oddity, whatever — can never affect the session that's already
+        # active and working over the relay. See
+        # transport/hole_punch.py's module docstring for exactly what
+        # this does and doesn't enable today (short version: real,
+        # tested, but the browser controller has no peer address to
+        # punch toward yet, so this is discovery+reporting only, not a
+        # live punch attempt).
+        asyncio.create_task(self._p2p_phase1_discover(session_id))
+
+    async def _p2p_phase1_discover(self, session_id: str) -> None:
+        if not self._shared_key or not self.relay_url:
+            return
+        try:
+            from urllib.parse import urlparse
+            from transport.hole_punch import (
+                make_probe_token, open_punch_socket, discover_public_endpoint,
+            )
+
+            parsed = urlparse(self.relay_url)
+            relay_host = parsed.hostname
+            # Matches config/settings.py's punch_port default (0 = reuse
+            # the main relay port for UDP too) — if the relay operator set
+            # a non-default punch_port, this won't find it; that's a known
+            # limitation of inferring it purely from relay_url rather than
+            # the agent being told explicitly, not a bug in the discovery
+            # logic itself.
+            relay_port = parsed.port or 7000
+            if not relay_host:
+                return
+
+            token = make_probe_token(self._shared_key, session_id)
+            transport, protocol, local_port = await open_punch_socket()
+            try:
+                endpoint = await discover_public_endpoint(
+                    transport, protocol, relay_host, relay_port, token, timeout=5.0
+                )
+            finally:
+                transport.close()
+
+            if endpoint:
+                logging.info(f"[agent] P2P endpoint discovered: {endpoint}")
+                await self._send_session(
+                    MessageType.P2P_ENDPOINT_OFFER,
+                    {"endpoint": list(endpoint)},
+                )
+            else:
+                logging.debug("[agent] P2P endpoint discovery: no response (non-fatal)")
+        except Exception as e:
+            # Deliberately swallow everything here — this is a best-effort
+            # side channel, never allowed to affect the real session.
+            logging.debug(f"[agent] P2P phase 1 discovery skipped: {e}")
 
     # ------------------------------------------------------------------
     # Session message dispatch
@@ -345,30 +414,79 @@ class BaseAgent(ABC):
             entries = await self.on_file_list(path)
             await self._send_session(MessageType.FILE_LIST, {"path": path, "entries": entries})
 
-        elif t == MessageType.FILE_DOWNLOAD_START:
-            path = (msg.payload or {}).get("path")
-            data = await self.on_file_download(path)
-            if data:
-                chunk_size = 65536
-                total = len(data)
-                for i in range(0, total, chunk_size):
-                    chunk = data[i: i + chunk_size]
-                    await self._send_session(
-                        MessageType.FILE_DOWNLOAD_CHUNK,
-                        {
-                            "data": chunk.hex(),
-                            "offset": i,
-                            "total": total,
-                            "done": (i + chunk_size) >= total,
-                        },
-                    )
+        elif t == MessageType.FILE_UPLOAD_START:
+            # Initialise an in-memory buffer for this transfer.  The transfer_id
+            # lets multiple uploads run in parallel without their chunks
+            # interleaving (the frontend only starts one at a time today, but
+            # we're protocol-correct about it regardless).
+            p = msg.payload or {}
+            tid  = p.get("transfer_id", "default")
+            path = p.get("path")
+            if not hasattr(self, "_upload_buffers"):
+                self._upload_buffers: Dict[str, Dict] = {}
+            self._upload_buffers[tid] = {"path": path, "chunks": {}}
+
+        elif t == MessageType.FILE_UPLOAD_CHUNK:
+            p = msg.payload or {}
+            tid   = p.get("transfer_id", "default")
+            index = p.get("index", 0)
+            b64   = p.get("data", "")
+            if not hasattr(self, "_upload_buffers"):
+                self._upload_buffers = {}
+            buf = self._upload_buffers.get(tid)
+            if buf and b64:
+                try:
+                    import base64
+                    buf["chunks"][index] = base64.b64decode(b64)
+                except Exception as e:
+                    log.error("file_upload_chunk.decode_error", error=str(e))
 
         elif t == MessageType.FILE_UPLOAD_END:
             p = msg.payload or {}
+            tid = p.get("transfer_id", "default")
+            if not hasattr(self, "_upload_buffers"):
+                self._upload_buffers = {}
+            buf = self._upload_buffers.pop(tid, None)
+            success = False
+            path = None
+            if buf:
+                path = buf.get("path")
+                # Reassemble chunks in index order
+                ordered = b"".join(
+                    buf["chunks"][k] for k in sorted(buf["chunks"])
+                )
+                success = await self.on_file_upload(path, ordered)
+            await self._send_session(
+                MessageType.FILE_UPLOAD_END,
+                {"ok": success, "path": path, "transfer_id": tid},
+            )
+
+        elif t == MessageType.FILE_DOWNLOAD_START:
+            p = msg.payload or {}
             path = p.get("path")
-            data_hex = p.get("data", "")
-            ok = await self.on_file_upload(path, bytes.fromhex(data_hex))
-            await self._send_session(MessageType.FILE_UPLOAD_END, {"ok": ok, "path": path})
+            data = await self.on_file_download(path)
+            if data is None:
+                await self._send_session(
+                    MessageType.FILE_DOWNLOAD_CHUNK,
+                    {"path": path, "error": "File not found or access denied", "done": True},
+                )
+            else:
+                chunk_size = 65536  # 64 KB per chunk
+                total = len(data)
+                chunks = range(0, total, chunk_size) if total else [0]
+                for i, offset in enumerate(chunks):
+                    chunk = data[offset: offset + chunk_size]
+                    is_done = (offset + chunk_size) >= total
+                    await self._send_session(
+                        MessageType.FILE_DOWNLOAD_CHUNK,
+                        {
+                            "path": path,
+                            "data": chunk.hex(),
+                            "offset": offset,
+                            "total": max(total, 1),
+                            "done": is_done,
+                        },
+                    )
 
         elif t == MessageType.CLIPBOARD_GET:
             text = await self.on_clipboard_get()
@@ -376,6 +494,40 @@ class BaseAgent(ABC):
 
         elif t == MessageType.CLIPBOARD_SET:
             await self.on_clipboard_set((msg.payload or {}).get("text", ""))
+
+        elif t == MessageType.CAMERA_START:
+            await self.on_camera_start(msg.payload or {})
+
+        elif t == MessageType.CAMERA_STOP:
+            await self.on_camera_stop(msg.payload or {})
+
+        elif t == MessageType.CAMERA_LIST:
+            # NOTE: this case was missing entirely — on_camera_list() existed
+            # as a hook and could build+send a response, but nothing ever
+            # called it, so a controller's camera_list request was silently
+            # dropped no matter what the agent implementation did.
+            await self.on_camera_list(msg.payload or {})
+
+        elif t == MessageType.CAMERA_SNAPSHOT:
+            await self.on_camera_snapshot(msg.payload or {})
+
+        elif t == MessageType.NET_PROBE_ACK:
+            await self.on_net_probe_ack(msg.payload or {})
+
+        elif t == MessageType.P2P_ENDPOINT_OFFER:
+            await self.on_p2p_endpoint_offer(msg.payload or {})
+
+        elif t == MessageType.P2P_STATUS:
+            await self.on_p2p_status(msg.payload or {})
+
+        elif t == MessageType.AUDIO_START:
+            await self.on_audio_start(msg.payload or {})
+
+        elif t == MessageType.AUDIO_STOP:
+            await self.on_audio_stop(msg.payload or {})
+
+        elif t == MessageType.AUDIO_DATA:
+            await self.on_audio_data(msg.payload or {})
 
         elif t == MessageType.CLOSE:
             logging.info(f"[agent] Session closed by controller: {msg.session_id}")

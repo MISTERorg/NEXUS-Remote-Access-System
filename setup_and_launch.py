@@ -250,21 +250,67 @@ def auto_setup_upnp_port_mapping(port: int) -> bool:
 # AUTOMATION SOLUTION 3 — Automatic Internet Reverse SSH Tunneling
 # ════════════════════════════════════════════════════════════════════════════
 
-GLOBAL_TUNNEL_PROC: subprocess.Popen | None = None
+GLOBAL_TUNNEL_PROCS: list[subprocess.Popen] = []
 
-def auto_start_public_tunnel(local_port: int) -> str | None:
+def auto_start_public_tunnel(
+    local_port: int, label: str = "service", attempts: int = 3, timeout: float = 20.0
+) -> str | None:
     """
     Spawns an automated reverse SSH tunnel to create a public WSS address.
-    Requires no router configuration and bypasses CGNAT completely.
-    """
-    global GLOBAL_TUNNEL_PROC
-    hdr("Automated Network Setup — Public Tunnel Creation")
-    info("Establishing zero-config public internet tunnel via SSH...")
+    Requires no router configuration and bypasses CGNAT completely — this
+    is the correct default path, not a fallback, for anyone whose ISP puts
+    them behind carrier-grade NAT (a raw "public" IP in that situation
+    isn't actually routed to your router at all; no amount of port
+    forwarding or firewall configuration can fix that, only an
+    outbound-initiated tunnel like this one can).
 
+    IMPORTANT — this must be called AFTER whatever's listening on
+    `local_port` is actually up. pinggy establishes the reverse forward
+    immediately; if nothing is listening yet, the tunnel URL it hands back
+    will accept connections and then immediately fail them. The caller
+    (async_main) is responsible for this ordering.
+
+    Retries `attempts` times with a fixed per-attempt `timeout` — a single
+    10s attempt (the old default) isn't generous enough for pinggy's
+    negotiation over a slow or congested link, and a transient failure
+    here shouldn't take down the only NAT-traversal path that works
+    regardless of router config or CGNAT.
+    """
+    hdr(f"Automated Network Setup — Public Tunnel ({label})")
+
+    for attempt in range(1, attempts + 1):
+        info(f"Establishing zero-config public internet tunnel via SSH... (attempt {attempt}/{attempts})")
+        tunnel_url = _try_start_tunnel_once(local_port, timeout)
+        if tunnel_url:
+            if _verify_tunnel_reachable(tunnel_url):
+                ok(f"Public Tunnel Active ({label}): {tunnel_url}")
+                return tunnel_url
+            warn(f"Tunnel URL was created but didn't respond to a connection test: {tunnel_url}")
+            warn("This usually means the local service wasn't listening yet, or the tunnel")
+            warn("dropped immediately after connecting. Retrying...")
+        if attempt < attempts:
+            time.sleep(2)
+
+    warn(f"Could not establish a working public tunnel for {label} after {attempts} attempts.")
+    return None
+
+
+def _try_start_tunnel_once(local_port: int, timeout: float) -> str | None:
     cmd = [
         "ssh",
+        # Never prompt interactively — if auth fails, fail immediately
+        # with an error message rather than hanging on a password prompt.
+        # This was the root cause of the screenshot issue: the process
+        # was blocking on `qr@a.pinggy.io's password:` at the tty while
+        # our stdout-reading loop timed out without ever seeing the URL.
+        "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=no",
+        # pinggy's free/anonymous tunnel requires no auth (SSH public key
+        # or nothing) — if the server asks for a password, we want an
+        # instant failure rather than a 20-second hang.
+        "-o", "PasswordAuthentication=no",
         "-o", "ServerAliveInterval=15",
+        "-o", "ConnectTimeout=10",
         "-p", "443",
         f"-R0:localhost:{local_port}",
         "qr@a.pinggy.io"
@@ -273,47 +319,120 @@ def auto_start_public_tunnel(local_port: int) -> str | None:
     try:
         proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,   # cut off the tty entirely
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
+            stderr=subprocess.PIPE,     # capture separately so we can
+            text=True,                  # merge both streams below
+            bufsize=1,
         )
-        GLOBAL_TUNNEL_PROC = proc
+        GLOBAL_TUNNEL_PROCS.append(proc)
+
+        import selectors
+        sel = selectors.DefaultSelector()
+        sel.register(proc.stdout, selectors.EVENT_READ, "stdout")
+        sel.register(proc.stderr, selectors.EVENT_READ, "stderr")
 
         start_time = time.time()
         tunnel_url = None
+        all_output = []
 
-        while time.time() - start_time < 10:
+        while time.time() - start_time < timeout:
             if proc.poll() is not None:
+                # drain remaining output before giving up
+                for stream in (proc.stdout, proc.stderr):
+                    try:
+                        all_output.append(stream.read())
+                    except Exception:
+                        pass
                 break
-            line = proc.stdout.readline() if proc.stdout else ""
-            if not line:
-                time.sleep(0.1)
-                continue
 
-            # Look for pinggy URL outputs
-            m = re.search(r"(https?://[a-zA-Z0-9\.\-]+\.pinggy\.[a-z]+|tcp://[a-zA-Z0-9\.\-]+:[0-9]+)", line)
-            if m:
-                raw_url = m.group(1)
-                if raw_url.startswith("https://"):
-                    tunnel_url = raw_url.replace("https://", "wss://")
-                elif raw_url.startswith("http://"):
-                    tunnel_url = raw_url.replace("http://", "ws://")
-                elif raw_url.startswith("tcp://"):
-                    tunnel_url = raw_url.replace("tcp://", "wss://")
+            ready = sel.select(timeout=0.2)
+            for key, _ in ready:
+                line = key.fileobj.readline()
+                if not line:
+                    continue
+                all_output.append(line)
+                dim(f"  [tunnel] {line.rstrip()}")
+
+                # pinggy prints its URL on stderr in the format:
+                #   https://XXXX.a.pinggy.io     (HTTPS tunnel URL)
+                #   tcp://XXXX.a.pinggy.io:PORT   (TCP tunnel URL)
+                # Some versions also print it on stdout. We watch both.
+                m = re.search(
+                    r"(https?://[a-zA-Z0-9\.\-]+\.(?:pinggy\.io|pinggy\.link)"
+                    r"|tcp://[a-zA-Z0-9\.\-]+\.(?:pinggy\.io|pinggy\.link):[0-9]+)",
+                    line,
+                )
+                if m:
+                    raw_url = m.group(1)
+                    if raw_url.startswith("https://"):
+                        tunnel_url = raw_url.replace("https://", "wss://")
+                    elif raw_url.startswith("http://"):
+                        tunnel_url = raw_url.replace("http://", "ws://")
+                    elif raw_url.startswith("tcp://"):
+                        tunnel_url = raw_url.replace("tcp://", "wss://")
+                    if tunnel_url:
+                        break
+
+            if tunnel_url:
                 break
+
+        sel.close()
 
         if tunnel_url:
-            ok(f"Public Tunnel Active: {tunnel_url}")
             return tunnel_url
+
+        # Give a helpful diagnostic — show what pinggy actually printed so
+        # the user can see if it's an auth problem, a network block, etc.
+        joined = "".join(all_output).strip()
+        if "Permission denied" in joined or "password" in joined.lower():
+            warn("SSH auth failed — pinggy rejected the connection.")
+            warn("This usually means your SSH public key needs to be set up.")
+            warn("Run: ssh-keygen  (accept defaults) then retry.")
+        elif "Connection refused" in joined or "connect to host" in joined.lower():
+            warn("Could not reach a.pinggy.io:443 — check your internet/firewall.")
+        elif joined:
+            warn("Tunnel connected but no URL was found in pinggy's output. Raw output:")
+            for line in joined.splitlines()[:10]:
+                dim(f"  {line}")
         else:
-            warn("Public SSH tunnel could not parse an endpoint URL within timeout")
+            warn("Public SSH tunnel produced no output within timeout.")
+
     except FileNotFoundError:
-        warn("SSH client not found in PATH — skipping automated tunnel creation")
+        warn("SSH client not found in PATH — skipping automated tunnel creation.")
+        warn("Install OpenSSH:  Windows: winget install Microsoft.OpenSSH.Client")
+        warn("                  Linux: sudo apt install openssh-client")
     except Exception as e:
         warn(f"Tunnel creation failed: {e}")
 
     return None
+
+
+def _verify_tunnel_reachable(tunnel_url: str) -> bool:
+    """
+    Best-effort confirmation that the tunnel actually round-trips, rather
+    than trusting "pinggy printed a URL" as proof it works. Catches
+    exactly the ordering bug this function's docstring warns about: a
+    tunnel established before the local service was listening will still
+    print a URL, but nothing will be on the other end of it.
+
+    A plain TCP connect, not a full WS handshake — cheap, and sufficient
+    to distinguish "something is listening end-to-end" from "connection
+    refused/timed out". Never raises; treat False as "couldn't confirm",
+    not a hard failure — the tunnel may still work even if this advisory
+    check itself is blocked by a restrictive local network.
+    """
+    try:
+        parsed = urlparse(tunnel_url.replace("wss://", "https://").replace("ws://", "http://"))
+        host = parsed.hostname
+        port = parsed.port or 443
+        if not host:
+            return False
+        with socket.create_connection((host, port), timeout=6):
+            return True
+    except Exception as e:
+        dim(f"Tunnel reachability check inconclusive: {e}")
+        return False
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -568,12 +687,13 @@ async def wait_for_port_async(port: int, timeout: int = 15, label: str = "") -> 
     return False
 
 
-async def start_relay(relay_port: int):
+async def start_relay(relay_port: int, plain_tunnel_port: int = 0):
     from core.relay import RelayServer
     from config.settings import settings
 
     settings.relay.host = "0.0.0.0"
     settings.relay.port = relay_port
+    settings.relay.plain_tunnel_port = plain_tunnel_port
 
     cert_file = CERTS_DIR / "nexus-relay-server.crt"
     key_file  = CERTS_DIR / "nexus-relay-server.key"
@@ -611,7 +731,9 @@ async def start_dashboard(api_port: int):
 # Config Instructions Generator
 # ════════════════════════════════════════════════════════════════════════════
 
-def print_and_save_instructions(state: dict, tunnel_url: str | None) -> None:
+def print_and_save_instructions(
+    state: dict, relay_tunnel_url: str | None, dashboard_tunnel_url: str | None
+) -> None:
     public_ip   = state.get("public_ip", "127.0.0.1")
     lan_ip      = state.get("lan_ip", "127.0.0.1")
     agent_token = state.get("agent_token", "")
@@ -624,29 +746,39 @@ def print_and_save_instructions(state: dict, tunnel_url: str | None) -> None:
 
     lan_cmd    = f"python connect_remote.py --relay {proto}://{lan_ip}:{relay_port} --token {agent_token}"
     wan_cmd    = f"python connect_remote.py --relay {proto}://{public_ip}:{relay_port} --token {agent_token}"
-    tunnel_cmd = f"python connect_remote.py --relay {tunnel_url} --token {agent_token}" if tunnel_url else None
+    tunnel_cmd = f"python connect_remote.py --relay {relay_tunnel_url} --token {agent_token}" if relay_tunnel_url else None
 
-    # Don't hand out the WAN command as "the" command to run on a remote PC
-    # when it's actually just the LAN IP in disguise — that command can only
-    # ever work for a machine already on this LAN, which defeats the point
-    # of it being labeled the WAN/primary path. Prefer the tunnel command in
-    # that case even though the normal preference order is tunnel > WAN.
-    if wan_broken and not tunnel_cmd:
+    # The tunnel is now the DEFAULT recommendation, not a fallback for when
+    # the direct WAN path fails. Reasoning: a "public" IP from a plain
+    # outbound lookup is not proof of inbound reachability — firewalls,
+    # missing port forwards, and (increasingly common) ISP-level carrier-
+    # grade NAT can all make that address unreachable from outside even
+    # though it printed a real-looking number. The tunnel is outbound-
+    # initiated, so none of those three things can block it. The direct
+    # WAN command is kept below as an advanced/manual option for people
+    # who have confirmed port forwarding works and want to skip the
+    # tunnel hop for latency reasons — not as the thing to try first.
+    if tunnel_cmd:
+        primary_cmd = tunnel_cmd
+    elif wan_broken:
         primary_cmd = lan_cmd
     else:
-        primary_cmd = tunnel_cmd or wan_cmd
+        primary_cmd = wan_cmd
 
     hdr("HOW TO CONNECT THE REMOTE PC")
 
-    if wan_broken:
-        warn("Public WAN IP could not be determined — it is currently identical to the")
-        warn("LAN IP below. The WAN Relay URL will NOT work for a remote PC outside this")
-        warn("network. Set NEXUS_PUBLIC_IP and re-run with --reset to fix this.")
-        if tunnel_cmd:
-            warn("Use the Tunnel Relay URL below instead — it doesn't need a public IP.")
+    if not tunnel_cmd:
+        warn("No public tunnel could be established this run (check --no-tunnel, whether")
+        warn("an SSH client is available, or your outbound internet connectivity).")
+        if wan_broken:
+            warn("Public WAN IP also could not be determined, so the command below will")
+            warn("only work for a machine already on this LAN.")
         else:
-            warn("No Tunnel Relay URL was created this run either (check --no-tunnel or")
-            warn("your internet connectivity if you expected one).")
+            warn("Falling back to the direct WAN command below — this REQUIRES port")
+            warn("forwarding on your router and will NOT work if your ISP uses carrier-")
+            warn("grade NAT (very common on residential/mobile connections). If the")
+            warn("remote PC can't connect, that's almost certainly why — re-run this")
+            warn("script to retry the tunnel rather than debugging router settings.")
 
     print(f"""
   {_c('1', 'Command to run on the Remote PC:')}
@@ -657,16 +789,32 @@ def print_and_save_instructions(state: dict, tunnel_url: str | None) -> None:
 """)
 
     print(_c("1;96", "  ╔════════════════════════════════════════════════════════════════════╗"))
-    if tunnel_url:
-        print(_c("1;92", f"  ║  Tunnel Relay (Public) : {tunnel_url}"))
-    print(_c("1;96", f"  ║  LAN Relay (Local)    : {proto}://{lan_ip}:{relay_port}"))
-    if wan_broken:
-        print(_c("1;91", f"  ║  WAN Relay (Direct)   : {proto}://{public_ip}:{relay_port}  [BROKEN — same as LAN IP]"))
-    else:
-        print(_c("1;96", f"  ║  WAN Relay (Direct)   : {proto}://{public_ip}:{relay_port}"))
-    print(_c("1;93", f"  ║  Agent Token          : {agent_token}"))
-    print(_c("1;92", f"  ║  Dashboard Console    : http://localhost:{api_port}/console"))
+    if relay_tunnel_url:
+        print(_c("1;92", f"  ║  Relay (Public, recommended) : {relay_tunnel_url}"))
+    print(_c("1;96", f"  ║  Relay (Same LAN only)       : {proto}://{lan_ip}:{relay_port}"))
+    if not relay_tunnel_url:
+        tag = "  [BROKEN — same as LAN IP]" if wan_broken else "  [requires port forwarding — untested]"
+        color = "1;91" if wan_broken else "1;93"
+        print(_c(color, f"  ║  Relay (Direct WAN, advanced): {proto}://{public_ip}:{relay_port}{tag}"))
+    print(_c("1;93", f"  ║  Agent Token                 : {agent_token}"))
+    print(_c("1;96", "  ╠════════════════════════════════════════════════════════════════════╣"))
+    print(_c("1;96", f"  ║  Dashboard (this machine)    : http://localhost:{api_port}/console"))
+    if dashboard_tunnel_url:
+        dash_public = dashboard_tunnel_url.replace("wss://", "https://").replace("ws://", "http://") + "/console"
+        print(_c("1;92", f"  ║  Dashboard (from anywhere)   : {dash_public}"))
     print(_c("1;96", "  ╚════════════════════════════════════════════════════════════════════╝"))
+    print()
+
+    if relay_tunnel_url or dashboard_tunnel_url:
+        warn("Note: tunnel URLs above are freshly generated and WILL be different the")
+        warn("next time you restart this script — that's inherent to the free anonymous")
+        warn("tunnel service being used, not something wrong with your setup. For a")
+        warn("permanent address that never changes, see README.md's section on that.")
+
+    print(_c("2", "  A failed `ping` to any of these addresses does NOT necessarily mean the"))
+    print(_c("2", "  connection is broken — many networks block ICMP ping while still allowing"))
+    print(_c("2", "  the actual WebSocket connection through. Test with the connect command"))
+    print(_c("2", "  itself, not ping."))
     print()
 
     snippet_file = BASE_DIR / "SEND_TO_REMOTE_PC.txt"
@@ -678,21 +826,37 @@ def print_and_save_instructions(state: dict, tunnel_url: str | None) -> None:
         f"{'='*60}\n"
         f"DETAILED CONNECTION ENDPOINTS:\n"
     )
-    if tunnel_url:
-        content += f"Tunnel Relay URL : {tunnel_url}\n"
+    if relay_tunnel_url:
+        content += f"Relay URL (public, recommended) : {relay_tunnel_url}\n"
     content += (
-        f"LAN Relay URL    : {proto}://{lan_ip}:{relay_port}\n"
-        f"WAN Relay URL    : {proto}://{public_ip}:{relay_port}\n"
-        f"Agent Token      : {agent_token}\n"
+        f"Relay URL (same LAN only)       : {proto}://{lan_ip}:{relay_port}\n"
+        f"Relay URL (direct WAN, advanced): {proto}://{public_ip}:{relay_port}\n"
+        f"Agent Token                     : {agent_token}\n\n"
+        f"Dashboard (this machine)        : http://localhost:{api_port}/console\n"
     )
-    if wan_broken:
+    if dashboard_tunnel_url:
+        dash_public = dashboard_tunnel_url.replace("wss://", "https://").replace("ws://", "http://") + "/console"
+        content += f"Dashboard (from anywhere)       : {dash_public}\n"
+    if not relay_tunnel_url:
         content += (
             f"\n"
-            f"WARNING: WAN Relay URL above is identical to the LAN Relay URL because\n"
-            f"public IP discovery failed on the host machine. It will only work for a\n"
-            f"remote PC already on the same local network. Set NEXUS_PUBLIC_IP and\n"
-            f"re-run setup_and_launch.py --reset on the host to fix this.\n"
+            f"NOTE: No public tunnel was established this run, so the direct WAN URL\n"
+            f"above requires port forwarding on your router and will NOT work if your\n"
+            f"ISP uses carrier-grade NAT. Re-run setup_and_launch.py to retry the tunnel.\n"
         )
+    if relay_tunnel_url or dashboard_tunnel_url:
+        content += (
+            f"\n"
+            f"NOTE: The public URL(s) above are freshly generated and will change the\n"
+            f"next time this script restarts — see README.md for how to get a permanent\n"
+            f"address instead.\n"
+        )
+    content += (
+        f"\n"
+        f"NOTE: A failed `ping` to any address above does not prove the connection is\n"
+        f"broken — many networks block ICMP while still allowing the real connection\n"
+        f"through. Test with the run command itself, not ping.\n"
+    )
     snippet_file.write_text(content, encoding="utf-8")
     ok("Instruction file updated → SEND_TO_REMOTE_PC.txt")
 
@@ -721,21 +885,37 @@ async def async_main(args):
 
     if not args.no_upnp:
         auto_setup_upnp_port_mapping(RELAY_PORT)
-
-    tunnel_url = None
-    if not args.no_tunnel:
-        tunnel_url = auto_start_public_tunnel(RELAY_PORT)
+        auto_setup_upnp_port_mapping(API_PORT)
 
     state = run_setup(RELAY_PORT, API_PORT, force_reset=args.reset)
 
+    # Plain (non-TLS), loopback-only port the relay also listens on
+    # specifically for the reverse tunnel to target — see the
+    # plain_tunnel_port docstring in config/settings.py. Picked to avoid
+    # colliding with the dashboard's API_PORT.
+    plain_tunnel_port = RELAY_PORT + 1
+    if plain_tunnel_port == API_PORT:
+        plain_tunnel_port += 1
+
     hdr("Starting Core Services")
-    relay_task = asyncio.create_task(start_relay(RELAY_PORT))
+    relay_task = asyncio.create_task(start_relay(RELAY_PORT, plain_tunnel_port))
     dash_task  = asyncio.create_task(start_dashboard(API_PORT))
 
     await wait_for_port_async(RELAY_PORT, label="Relay Server")
     await wait_for_port_async(API_PORT, label="Dashboard API")
+    await wait_for_port_async(plain_tunnel_port, label="Relay Tunnel Listener")
 
-    print_and_save_instructions(state, tunnel_url)
+    # Tunnels are started AFTER the services above confirm they're actually
+    # listening — starting them earlier (the old order) meant the tunnel
+    # would hand back a URL that looked valid but connected to nothing,
+    # since nothing was on the other end of the reverse forward yet.
+    relay_tunnel_url = None
+    dashboard_tunnel_url = None
+    if not args.no_tunnel:
+        relay_tunnel_url = auto_start_public_tunnel(plain_tunnel_port, label="Remote Agents / Relay")
+        dashboard_tunnel_url = auto_start_public_tunnel(API_PORT, label="Dashboard Console")
+
+    print_and_save_instructions(state, relay_tunnel_url, dashboard_tunnel_url)
 
     dashboard_path = find_dashboard_html()
     if not args.no_browser and dashboard_path:
@@ -748,8 +928,8 @@ async def async_main(args):
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
-        if GLOBAL_TUNNEL_PROC:
-            GLOBAL_TUNNEL_PROC.terminate()
+        for proc in GLOBAL_TUNNEL_PROCS:
+            proc.terminate()
         relay_task.cancel()
         dash_task.cancel()
         ok("NEXUS services stopped cleanly.")

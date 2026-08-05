@@ -1,0 +1,38 @@
+# --- Core / dashboard backend --------------------------------------------
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-multipart
+
+# --- Auth / crypto ---------------------------------------------------------
+PyJWT
+cryptography
+bcrypt
+pyotp                # optional: real TOTP verification (auth.py degrades
+                      # gracefully to "MFA check skipped" if absent)
+
+# --- Relay / agents ----------------------------------------------------------
+websockets
+psutil
+
+# --- Transport / NAT traversal (transport/tunnel.py) --------------------------
+paramiko                # optional: only needed for tunnel.py's SSHTunnel
+
+# --- Config / logging --------------------------------------------------------
+PyYAML                # config/defaults.yaml loading
+structlog              # optional: falls back to stdlib logging if absent
+
+# --- Desktop agent (screen / input / clipboard) ------------------------------
+mss                     # screen capture
+Pillow                  # JPEG encoding of captured frames
+pyperclip               # optional clipboard fallback, if your desktop_agent uses it
+
+# --- Camera / audio (agents/av_handler.py) — all optional, degrade gracefully
+opencv-python           # camera capture
+sounddevice             # mic/speaker I/O (preferred)
+# pyaudio                # mic/speaker I/O (fallback if sounddevice/PortAudio unavailable)
+numpy                   # required alongside sounddevice
+
+# --- Packaging (deploy_tools / build_standalone.py) --------------------------
+# pyinstaller            # only needed when running build_standalone.py

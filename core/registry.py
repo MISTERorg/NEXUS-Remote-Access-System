@@ -42,6 +42,7 @@ class DeviceCapabilities(BaseModel):
     terminal: bool = False
     clipboard: bool = False
     audio: bool = False
+    camera: bool = False
     metrics: bool = True    # CPU/RAM/disk stats
 
 
