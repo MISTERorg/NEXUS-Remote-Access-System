@@ -12,8 +12,8 @@ A complete walkthrough of authentication, device registration, remote desktop, f
 
 [![Watch the demo](https://img.youtube.com/vi/SgZZgWiHcBY/0.jpg)](https://youtu.be/SgZZgWiHcBY)
 
---- 
-### general demonstration and explanation of the platform.
+
+#### general demonstration and explanation of the platform.
 
 
 ---
