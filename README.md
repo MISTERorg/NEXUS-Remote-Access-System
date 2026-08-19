@@ -10,7 +10,7 @@ NEXUS is a self-hosted remote access platform that lets operators securely contr
 
 A complete walkthrough of authentication, device registration, remote desktop, file transfer, and terminal access is available in the project video:
 
-**[Video Project (1).mp4](Video%20Project%20(1).mp4)** — general demonstration and explanation of the platform.
+**[Video Project (1).mp4](Video_Project.mp4)** — general demonstration and explanation of the platform.
 
 > Place the video file at `Video Project (1).mp4` (or update the link to match your media location).
 
@@ -44,15 +44,15 @@ python setup_and_launch.py
 
 Operators authenticate against the dashboard with username, password, and optional TOTP.
 
-![Login form](assets/img.png)
+![Login form](img.png)
 
 Invalid credentials are rejected immediately with a clear error.
 
-![Invalid credentials](assets/img_1.png)
+![Invalid credentials](img_1.png)
 
 On success the session is established and the Control Center loads.
 
-![Authenticated dashboard](assets/img_2.png)
+![Authenticated dashboard](img_2.png)
 
 ---
 
@@ -60,7 +60,7 @@ On success the session is established and the Control Center loads.
 
 Once agents connect, they appear in the **Registered Endpoint Fleet** with status, capabilities, and one-click actions.
 
-![Device registered and online](assets/img_3.png)
+![Device registered and online](img_3.png)
 
 Key controls available from the overview:
 
@@ -82,7 +82,7 @@ Launch a live remote desktop session to any online, non-busy endpoint. The strea
 - Clipboard pull / push
 - Full-screen mode
 
-![Remote desktop session](assets/img_4.png)
+![Remote desktop session](img_4.png)
 
 ---
 
@@ -90,7 +90,7 @@ Launch a live remote desktop session to any online, non-busy endpoint. The strea
 
 Transfer files between the operator’s browser and the remote endpoint through a dual-pane interface. Stage files locally, then push or pull with a single action.
 
-![Dual File Manager](assets/img_5.png)
+![Dual File Manager](img_5.png)
 
 ---
 
@@ -98,7 +98,7 @@ Transfer files between the operator’s browser and the remote endpoint through 
 
 Open an interactive shell on the remote device. Commands are executed in real time and output is streamed back to the console.
 
-![Shell terminal with ipconfig](assets/img_6.png)
+![Shell terminal with ipconfig](img_6.png)
 
 ---
 
