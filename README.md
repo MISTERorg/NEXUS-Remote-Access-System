@@ -10,9 +10,7 @@ NEXUS is a self-hosted remote access platform that lets operators securely contr
 
 A complete walkthrough of authentication, device registration, remote desktop, file transfer, and terminal access is available in the project video:
 
-**## 🎥 Demo Video
-
-[![Watch the demo](https://img.youtube.com/vi/SgZZgWiHcBY/0.jpg)](https://youtu.be/SgZZgWiHcBY)
+**[![Watch the demo](https://img.youtube.com/vi/SgZZgWiHcBY/0.jpg)](https://youtu.be/SgZZgWiHcBY)
 ** 
 — general demonstration and explanation of the platform.
 
