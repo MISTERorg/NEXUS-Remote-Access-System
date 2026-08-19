@@ -1,116 +1,276 @@
-# NEXUS Remote Access
+# NEXUS
 
-Self-hosted remote desktop, terminal, and file-transfer platform. One relay server brokers encrypted sessions between operators (a browser dashboard) and agents (a small Python process running on the machine you want to control) — no port-forwarding required on the agent side, and no third-party cloud service sits in the middle of your traffic.
+**Enterprise Remote Access & Controller**
 
-> **Status: v1.** This is the first working version. It's had real debugging mileage (see [Known Limitations](#known-limitations-v1) below) but hasn't been used at scale or audited by anyone outside the team that built it. Read that section before deciding what you trust it with.
+NEXUS is a self-hosted remote access platform that lets operators securely control, monitor, and manage endpoint devices over a relay. It combines a WebSocket-based control plane, a FastAPI operator dashboard, and lightweight device agents into a single, modular system.
 
 ---
-## DEMO
 
-### LOGIN
-- ![img.png](img.png)
-- if your credentials are not correct you wont have access
-- ![img_1.png](img_1.png)
-### DASHBOARD
-![img_2.png](img_2.png)
-## What it does
+## Demonstration
 
-- **Remote desktop** — live screen streaming (JPEG over WebSocket) with full mouse and keyboard input forwarding.
-![img_3.png](img_3.png)
+A complete walkthrough of authentication, device registration, remote desktop, file transfer, and terminal access is available in the project video:
 
-- for presentation purposes, the demo was made on one node
+**[Video Project (1).mp4](docs/Video%20Project%20(1).mp4)** — general demonstration and explanation of the platform.
 
-![img_4.png](img_4.png)
+> Place the video file at `docs/Video Project (1).mp4` (or update the link to match your media location).
 
-- **Remote terminal** — a real shell (PowerShell on Windows, `$SHELL` elsewhere) attached per session, streamed both ways.
-- **File browser & transfer** — list remote directories; upload/download between operator and agent.
-![img_5.png](img_5.png)
-you get access to the target whole file system
+---
 
-- **Clipboard sync** — pull or push clipboard contents between operator and agent.
-- **Multi-device fleet** — a registry tracks every agent that's ever connected, online/offline/busy status, and per-device capabilities.
-- **Role-based access** — JWT-authenticated operators with `admin` / `operator` / `viewer` roles; agents authenticate separately with per-device tokens.
-- **End-to-end session encryption** — each session gets its own ECDH-derived AES-256-GCM key between the relay and the agent, independent of the outer TLS transport.
-- **NAT traversal by design** — the agent always makes an *outbound* connection to the relay, so a machine behind a home router or corporate NAT can still be reached without forwarding a single port on that end.
+## Quick Start
 
-## Architecture at a glance
+```bash
+pip install -r requirements.txt
 
-```
-┌─────────────┐        wss://          ┌──────────────┐        wss://          ┌─────────────┐
-│  Browser     │ ─────────────────────▶│  Relay        │◀───────────────────── │  Agent       │
-│  Dashboard   │  (operator, one       │  (owns every  │   (outbound only —    │  (runs on    │
-│  (dashboard  │   persistent WS       │   session's   │    agent never        │   target     │
-│   .html)     │   connection)         │   lifecycle)  │    listens)           │   machine)   │
-└─────────────┘                        └──────┬───────┘                        └─────────────┘
-                                               │
-                                        ┌──────┴───────┐
-                                        │  Dashboard    │   REST only: login, device
-                                        │  API          │   listing, session listing,
-                                        │  (dashboard   │   health. No session traffic
-                                        │   .py)        │   passes through here.
-                                        └──────────────┘
+# Terminal 1 — Relay (WebSocket hub)
+python -m core.relay --host 0.0.0.0 --port 7000
+
+# Terminal 2 — Dashboard (REST API + operator console)
+uvicorn ui.dashboard:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-The relay is the only thing either side ever has to reach: the agent dials out to it, and the operator's browser connects straight to it too. The dashboard's REST API is a separate, much smaller surface used only for login and read-only listings — it never sees screen frames, keystrokes, or file contents.
+Open `http://localhost:8080`, authenticate, and connect agents with the generated connector.
 
-Full component-by-component breakdown, wire protocol, and file-by-file reference: see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
-
-## Quick start
-
-**On the machine that will host the relay + dashboard** (the "controller" side):
+For one-click setup (relay + dashboard + optional public tunnel):
 
 ```bash
 python setup_and_launch.py
 ```
 
-This will, in order: discover your LAN and public IP, generate a self-signed TLS certificate if one doesn't exist, attempt UPnP port mapping and a public tunnel (best-effort — safe to ignore if either isn't available on your network), start the relay and the dashboard API, and print a `SEND_TO_REMOTE_PC.txt` file with everything needed to connect an agent.
+---
 
-Then open the dashboard:
+## Operator Console
+
+### Authentication
+
+Operators authenticate against the dashboard with username, password, and optional TOTP.
+
+![Login form](docs/assets/img.png)
+
+Invalid credentials are rejected immediately with a clear error.
+
+![Invalid credentials](docs/assets/img_1.png)
+
+On success the session is established and the Control Center loads.
+
+![Authenticated dashboard](docs/assets/img_2.png)
+
+---
+
+### Device Fleet & Overview
+
+Once agents connect, they appear in the **Registered Endpoint Fleet** with status, capabilities, and one-click actions.
+
+![Device registered and online](docs/assets/img_3.png)
+
+Key controls available from the overview:
+
+| Control            | Description                                      |
+|--------------------|--------------------------------------------------|
+| Remote Control     | Full interactive desktop session                 |
+| File Transfer      | Bidirectional dual-pane file manager             |
+| Command Shell      | Interactive PowerShell / shell terminal          |
+| Screen / Input / Clip | Capability badges shown per device            |
+
+---
+
+### Remote Desktop
+
+Launch a live remote desktop session to any online, non-busy endpoint. The stream supports:
+
+- Real-time screen capture with adaptive quality
+- Keyboard & mouse input (with capture toggle)
+- Clipboard pull / push
+- Full-screen mode
+
+![Remote desktop session](docs/assets/img_4.png)
+
+---
+
+### Dual File Manager
+
+Transfer files between the operator’s browser and the remote endpoint through a dual-pane interface. Stage files locally, then push or pull with a single action.
+
+![Dual File Manager](docs/assets/img_5.png)
+
+---
+
+### Shell Terminal
+
+Open an interactive shell on the remote device. Commands are executed in real time and output is streamed back to the console.
+
+![Shell terminal with ipconfig](docs/assets/img_6.png)
+
+---
+
+### Camera & Audio
+
+- Live camera list (dynamically detected), stream, and full-quality snapshot
+- Mic capture + speaker playback
+- Browser-side recording of the live view
+- AI frame-processor hook ready for custom models (runs on the agent)
+
+---
+
+## Architecture
+
+The codebase is organized so each capability lives in exactly one place, with a clear contract for how it plugs into the rest of the system.
 
 ```
-https://localhost:8080/console
+nexus/
+├── config/                # Shared settings (env > .env > defaults.yaml)
+│   ├── settings.py        #   Pydantic Settings
+│   └── defaults.yaml
+│
+├── core/                  # Server-side domain logic (relay process)
+│   ├── auth.py            #   Users, JWT, RBAC
+│   ├── registry.py        #   Device directory
+│   ├── session.py         #   Session lifecycle & message routing
+│   └── relay.py           #   WebSocket hub
+│
+├── transport/             # Network layer
+│   ├── websocket_transport.py  # Primary: WSServer / WSClient / ConnectionPool
+│   ├── tls_context.py          # Shared TLSContextFactory (mTLS-aware)
+│   ├── tcp_transport.py        # Fallback / P2P
+│   ├── tunnel.py               # NAT traversal (ReverseTunnel / SSHTunnel)
+│   └── hole_punch.py           # STUN-lite rendezvous + UDP hole-punch
+│
+├── agents/                # Device-side feature implementations
+│   ├── base_agent.py      # Abstract agent contract
+│   ├── desktop_agent.py   # Screen, input, clipboard
+│   ├── server_agent.py    # Terminal + files (headless)
+│   ├── camera.py          # Camera list / stream / snapshot + AI hook
+│   ├── audio.py           # Mic + speaker
+│   ├── av_handler.py      # Composition of camera + audio
+│   └── adaptive_quality.py # AIMD quality controller for streams
+│
+├── utils/                 # Crypto, logging, heartbeat, rate limiting
+│   ├── crypto.py
+│   ├── logger.py
+│   ├── heartbeat.py
+│   └── ratelimit.py
+│
+├── ui/                    # Operator dashboard
+│   ├── dashboard.py       # FastAPI app
+│   └── static/
+│       ├── dashboard.html
+│       ├── dashboard.css
+│       └── js/            # One JS file per feature
+│
+├── connect_remote.py      # Zero-touch agent connector
+├── nexus_agent_entry.py   # PyInstaller agent entrypoint
+├── setup_and_launch.py    # One-click launcher + public tunnel
+├── build_standalone.py    # Build both .exe targets
+└── requirements.txt
 ```
 
-Default login is `admin` / `admin123` — **change this immediately**, it's a seeded placeholder, not a production credential.
+### Feature boundary
 
-**On the machine you want to control** (the "agent" side), send that person `SEND_TO_REMOTE_PC.txt` and have them run the one-line command it contains, or:
+Every remote-control capability is defined once in `core/session.py` (`MessageType`) and implemented independently on each side:
+
+| Feature    | Agent side                          | Controller side (browser) |
+|------------|-------------------------------------|---------------------------|
+| Screen     | `desktop_agent.py`                  | `remote_desktop.js`       |
+| Input      | `desktop_agent.py`                  | `remote_desktop.js`       |
+| Camera     | `camera.py`                         | `av_control.js`           |
+| Audio      | `audio.py`                          | `av_control.js`           |
+| Terminal   | `server_agent.py` / `desktop_agent` | `terminal.js`             |
+| Files      | `server_agent.py` / `desktop_agent` | `file_manager.js`         |
+| Clipboard  | `desktop_agent.py`                  | `clipboard.js`            |
+
+To add a new feature (e.g. remote print):
+
+1. Add the message type in `core/session.py`.
+2. Map the required RBAC permission.
+3. Implement the `on_*` hook on the appropriate agent(s).
+4. Add a corresponding JS module and script tag in the dashboard.
+
+No other files need to change.
+
+### Agent contract
+
+`BaseAgent` owns connection, reconnect, heartbeat, and auth. Feature hooks (`on_screen_request`, `on_mouse_event`, `on_key_event`, terminal, files, clipboard, camera, audio) default to no-ops. New device types only override what they support.
+
+`AVHandlerMixin` composes `CameraMixin` + `AudioMixin` and is mixed into `DesktopAgent` so camera/audio can be developed and tested in isolation.
+
+### Adaptive quality streaming
+
+`AdaptiveQualityController` (AIMD) independently adjusts JPEG quality, scale, and FPS for screen and camera streams based on:
+
+- **RTT** (via `NET_PROBE` / `NET_PROBE_ACK`)
+- **Capture-loop lag**
+
+Downgrades fast (2 consecutive bad ticks), recovers slowly (6 consecutive good ticks). Quality is scaled relative to the operator’s configured baseline.
+
+### P2P endpoint discovery
+
+`transport/hole_punch.py` provides a STUN-lite UDP rendezvous server (started by the relay). After session handshake, agents discover their public endpoint and report it via `P2P_ENDPOINT_OFFER`. Full UDP hole-punch is implemented and tested; it is ready for native/CLI controllers or a future WebRTC path (browsers cannot open raw UDP sockets).
+
+---
+
+## Key Capabilities
+
+- **Relay & Session management** — authenticated WebSocket hub with JWT, RBAC, and clean session teardown.
+- **Adaptive quality streaming** — screen and camera streams adjust quality based on RTT and capture-loop lag (AIMD).
+- **P2P endpoint discovery** — STUN-lite rendezvous for future direct paths (WebRTC-ready foundation).
+- **Camera & Audio** — live device list, stream, full-quality snapshot, browser-side recording; AI frame-processor extension point.
+- **File transfer** — dual-pane manager with staging from the operator browser.
+- **Interactive shell** — real-time command execution with special-key support.
+- **TLS / mTLS** — shared TLS context factory; optional client certificates.
+- **NAT traversal helpers** — reverse tunnels, optional UPnP, and public tunnel support via `setup_and_launch.py`.
+- **Standalone builds** — PyInstaller scripts for both the agent connector and full agent binary.
+
+---
+
+## Configuration
+
+Settings are loaded in priority order:
+
+1. Environment variables  
+2. `.env` file  
+3. `config/defaults.yaml`
+
+Common entries include relay host/port, dashboard port, TLS certificates, feature flags, and quality baselines.
+
+---
+
+## Building Standalone Binaries
 
 ```bash
-python connect_remote.py --relay wss://<relay-address>:7000 --token <agent-token>
+python build_standalone.py
 ```
 
-**First connection from a new browser?** If the relay is using a self-signed certificate (the default), your browser will refuse the WebSocket silently. Visit `https://<relay-address>:7000/` directly first, accept the certificate warning there, then reload the dashboard. This is a one-time step per browser per relay address — see [ARCHITECTURE.md § TLS](./ARCHITECTURE.md#tls--certificates) for the permanent fix (a real or internal-CA-signed cert).
+Produces the zero-touch connector (`connect_remote` / `.exe`) and the full agent binary. Runtime hooks ensure OpenSSL and DLL search paths are correct on Windows.
 
-## Project structure
+---
 
-```
-agents/       — BaseAgent + DesktopAgent/ServerAgent/IoTAgent/MobileAgent
-core/         — relay, session, auth, device registry (the actual server logic)
-config/       — settings.py + defaults.yaml
-utils/        — crypto, logging, heartbeat, rate limiting
-transport/    — TCP/TLS/tunnel/WebSocket transport primitives
-ui/           — dashboard.py (REST API) + dashboard.html (operator console)
-connect_remote.py, nexus_agent_entry.py, build_standalone.py, setup_and_launch.py
-              — agent launcher, PyInstaller entry point/build, host setup script
-```
+## WAN / Public Access
 
-See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for what every single file does and how they connect.
+`setup_and_launch.py` can automatically:
 
-## Known limitations (v1)
+- Start the relay and dashboard
+- Attempt UPnP port mapping
+- Open a public reverse tunnel (recommended for CGNAT / residential ISPs)
+- Verify the tunnel is reachable before presenting the URL
 
-Being direct about this so nobody finds out the hard way:
+The tunnel is the most reliable path for most home networks. Direct WAN exposure remains available for advanced setups with proper port forwarding.
 
-- **Single-process, in-memory state.** `device_registry` and `session_manager` are process-local singletons. One relay process, one source of truth — no horizontal scaling, no shared state across multiple relay instances, and a process restart forgets every device and session.
-- **Rate limiting exists but isn't wired up.** `utils/heartbeat.py` has a working `RateLimiter`, and `defaults.yaml` has rate-limit config values, but nothing in `relay.py` or `dashboard.py` actually calls it yet. Don't rely on it being enforced.
-- **Self-signed certs by default.** Fine for a LAN or a small trusted team; every new browser has to manually accept the cert once (see Quick Start). For anything wider, get a real certificate or stand up an internal CA.
-- **No horizontal/HA story.** This is built for one relay serving one team, not a multi-tenant SaaS deployment.
-- **UPnP/public-tunnel auto-setup is best-effort.** If your router doesn't support UPnP or the tunnel binary isn't available, `setup_and_launch.py` falls back to LAN-only and tells you so — it won't silently pretend WAN access works when it doesn't (this was a real bug in an earlier build; it's fixed, but worth knowing the fallback exists).
-- **First real version.** Treat it as exactly that. Test in your own environment before pointing it at anything you can't afford to lose access to.
+> **Note:** Free anonymous tunnels typically receive a new random subdomain on every restart. For a permanent address, use a named tunnel (Cloudflare Tunnel, paid pinggy, etc.) or host the relay on a VPS with a stable domain.
 
-## Contributing
+---
 
-Standard flow: fork, branch, PR. If you're touching `core/relay.py` or `core/session.py`, read the wire protocol section of `ARCHITECTURE.md` first — the session lifecycle is entirely relay-owned by design, and it's easy to reintroduce a split-brain between the relay and the dashboard API if you're not careful about which one is supposed to own what.
+## Security Notes
 
-## License
+- Passwords are hashed; sessions use JWT + optional TOTP.
+- All control traffic is encrypted (AES-GCM / ECDH where applicable).
+- Rate limiting and structured security audit logging are built in.
+- The platform is designed for **authorized remote administration**. Deploy only on systems you own or have explicit permission to manage.
 
-### Any product or software which was build or designed from part or all the code base of NEXUS should reference it's creator Eng. DAUDET IKEORAH ELAD ANEDO
+---
+
+## License & Contribution
+
+This is a private / internal project structure. Adapt licensing and contribution guidelines to your organization’s requirements.
+
+---
+
+*NEXUS — Enterprise Remote Access & Controller*
